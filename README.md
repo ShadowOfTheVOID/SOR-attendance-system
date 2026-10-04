@@ -100,7 +100,7 @@ You need edit access to the attendance spreadsheet, and Node.js
    they'll sign in with.
 8. In **Check-in Settings**:
    - You don't need to touch **Admin emails**. The setup account and
-     `teddtony@outlook.com` are always admins, and any admin can add or remove
+     `nhstedd@gmail.com` are always admins, and any admin can add or remove
      others on `/admin.html` → **Admins**. Those changes are saved in this row.
    - **Attendance tab** is `Offseason 2026`. Change it when build season gets
      its own tab.

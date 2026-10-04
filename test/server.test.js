@@ -10,7 +10,7 @@ const TOKENS = {
   'tok-stranger': { email: 'stranger@example.com', emailVerified: true },
   'tok-unverified': { email: 'ana@example.com', emailVerified: false },
   'tok-owner': { email: 'owner@example.com', emailVerified: true },
-  'tok-tedd': { email: 'TeddTony@outlook.com', emailVerified: true }
+  'tok-tedd': { email: 'NhsTedd@gmail.com', emailVerified: true }
 };
 
 const day = (y, m, d) => new Date(Date.UTC(y, m - 1, d));
@@ -292,10 +292,10 @@ test('the built-in admin and the setup account are permanent admins', () => {
   const env = fresh();
   assert.equal(ok(env.call('me', 'tok-tedd')).isAdmin, true);
   assert.deepEqual(ok(env.call('listAdmins', 'tok-tedd')).admins, [
-    { email: 'teddtony@outlook.com', permanent: true },
+    { email: 'nhstedd@gmail.com', permanent: true },
     { email: 'owner@example.com', permanent: true }
   ]);
-  fail(env.call('removeAdmin', 'tok-owner', { email: 'teddtony@outlook.com' }), /permanent/);
+  fail(env.call('removeAdmin', 'tok-owner', { email: 'nhstedd@gmail.com' }), /permanent/);
 });
 
 test('admins can add and remove other admins from the website', () => {
@@ -318,9 +318,9 @@ test('admins can add and remove other admins from the website', () => {
   const row = s.cells.findIndex((r) => r && String(r[0]).startsWith('Admin emails')) + 1;
   assert.equal(s.get(row, 2), 'cara@example.com', 'stored in the settings tab');
   assert.deepEqual(logRows(env).filter((r) => /^Admin (added|removed)$/.test(r[4])).map((r) => [r[3], r[4], r[6]]), [
-    ['ana@example.com', 'Admin added', 'teddtony@outlook.com'],
+    ['ana@example.com', 'Admin added', 'nhstedd@gmail.com'],
     ['cara@example.com', 'Admin added', 'ana@example.com'],
-    ['ana@example.com', 'Admin removed', 'teddtony@outlook.com']
+    ['ana@example.com', 'Admin removed', 'nhstedd@gmail.com']
   ]);
 });
 

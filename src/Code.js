@@ -17,7 +17,7 @@
 
 // Always admins; can't be removed from the website. The account that set up
 // the script is always an admin too. Other admins are managed on /admin.html.
-var PERMANENT_ADMINS = ['teddtony@outlook.com'];
+var PERMANENT_ADMINS = ['nhstedd@gmail.com'];
 
 var TAB = {
   SETTINGS: 'Check-in Settings',
