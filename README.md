@@ -29,9 +29,11 @@ settings (default **Offseason 2026**):
   column-A labels: `Date`, `Shift Number`, `Location`, `Start Time`, `End Time`.
   Edited times like `3:45 PM --> 4:45` use the new time.
 - **Students are the rows below `Avg Attendees`.** The name is in column A.
-- **A check-in writes `Present`** into that student's cell for the shift. It
-  replaces `Not Present`, `Absent Excused` or `Absent Unexcused`, but never
-  `Partial` or `Unproductive`. Those stay the leads' call.
+- **A check-in writes `Present`** into that student's cell for the shift. A
+  check-in more than **30 minutes after the shift starts** writes `Partial`
+  instead; change the minutes, or blank them out to turn this off, in Check-in
+  Settings. It replaces `Not Present`, `Absent Excused` or `Absent Unexcused`,
+  but never a `Partial` or `Unproductive` a lead already set.
 - **Nothing else changes.** Formulas (Shift Score, counts), the row-30
   checkboxes, mentor/parent rows and every other tab are left alone.
 
@@ -165,8 +167,10 @@ It prints your site address, for example `https://sor-attendance.web.app`.
 - **New season tab:** change *Attendance tab* in Check-in Settings. The new tab
   needs the same column-A labels (`Date`, `Shift Number`, `Location`,
   `Start Time`, `End Time`, `Avg Attendees`).
-- **Partial / Unproductive / excused absences:** set them in the sheet as before,
-  or on `/admin.html`.
+- **Late arrivals:** marked `Partial` automatically after the *Partial after*
+  minutes. A lead can still change it.
+- **Unproductive / excused absences:** set them in the sheet as before, or on
+  `/admin.html`.
 
 ## Updating the code later
 

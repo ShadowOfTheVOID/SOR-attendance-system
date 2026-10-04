@@ -69,7 +69,20 @@ test('findMemberByEmail and sameName', () => {
   assert.ok(!L.sameName('', ''));
 });
 
+test('statusForCheckIn and parseMinutes', () => {
+  assert.equal(L.statusForCheckIn(13 * 60 + 30, 13 * 60, 30), 'Present', 'exactly at the limit');
+  assert.equal(L.statusForCheckIn(13 * 60 + 31, 13 * 60, 30), 'Partial');
+  assert.equal(L.statusForCheckIn(12 * 60 + 40, 13 * 60, 30), 'Present', 'early');
+  assert.equal(L.statusForCheckIn(23 * 60, 13 * 60, null), 'Present', 'disabled');
+  assert.equal(L.statusForCheckIn(23 * 60, null, 30), 'Present', 'no start time');
+  assert.equal(L.parseMinutes(' 30 '), 30);
+  assert.equal(L.parseMinutes(0), 0);
+  assert.equal(L.parseMinutes(''), null);
+  assert.equal(L.parseMinutes('soon'), null);
+});
+
 test('mergeCheckIn only replaces absent/blank cells', () => {
+  assert.deepEqual(L.mergeCheckIn('Not Present', 'Partial'), { status: 'Partial', changed: true });
   for (const s of ['', 'Not Present', 'Absent Excused', 'Absent Unexcused', null]) {
     assert.deepEqual(L.mergeCheckIn(s), { status: 'Present', changed: true }, String(s));
   }

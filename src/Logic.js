@@ -148,13 +148,29 @@ var AttendanceLogic = (function () {
     return normalize(a) !== '' && normalize(a) === normalize(b);
   }
 
-  /** What a check-in does to the student's existing cell. */
-  function mergeCheckIn(existing) {
+  /**
+   * "Partial" when checking in more than partialAfterMin minutes after the
+   * shift started, otherwise "Present". null partialAfterMin disables it.
+   */
+  function statusForCheckIn(nowMin, shiftStartMin, partialAfterMin) {
+    if (partialAfterMin == null || shiftStartMin == null) return 'Present';
+    return nowMin > shiftStartMin + partialAfterMin ? 'Partial' : 'Present';
+  }
+
+  /** What a check-in with status `incoming` does to the student's existing cell. */
+  function mergeCheckIn(existing, incoming) {
     var current = String(existing == null ? '' : existing).trim();
     if (CHECK_IN_REPLACES.indexOf(current) !== -1) {
-      return { status: 'Present', changed: true };
+      return { status: incoming || 'Present', changed: true };
     }
     return { status: current, changed: false };
+  }
+
+  /** Whole minutes >= 0 from a settings cell, or null when blank/invalid. */
+  function parseMinutes(value) {
+    var t = String(value == null ? '' : value).trim();
+    if (!/^\d+$/.test(t)) return null;
+    return Number(t);
   }
 
   /** Index of the rotating-code time window containing nowMs. */
@@ -208,7 +224,9 @@ var AttendanceLogic = (function () {
     findLabelRow: findLabelRow,
     findMemberByEmail: findMemberByEmail,
     sameName: sameName,
+    statusForCheckIn: statusForCheckIn,
     mergeCheckIn: mergeCheckIn,
+    parseMinutes: parseMinutes,
     timeStep: timeStep,
     truncateToCode: truncateToCode,
     normalizeCode: normalizeCode,

@@ -121,6 +121,28 @@ test('the check-in time picks the shift; the overlap counts for the next shift',
   assert.equal(env.att.get(35, COL.oct4s2), '', 'separator row untouched');
 });
 
+test('checking in more than 30 minutes after the shift starts marks Partial', () => {
+  const env = fresh({ now: new Date('2026-10-04T13:30:00Z') }); // shift 2 started 1:00
+  assert.equal(ok(env.call('checkIn', 'tok-ana', { code: codeAt(env, 'Hangar 391') })).status, 'Present');
+  env.setTime('2026-10-04T13:31:00Z');
+  const r = ok(env.call('checkIn', 'tok-cara', { code: codeAt(env, 'Hangar 391') }));
+  assert.equal(r.status, 'Partial');
+  assert.equal(env.att.get(ROW.cara, COL.oct4s2), 'Partial');
+  assert.equal(logRows(env).at(-1)[4], 'Partial');
+});
+
+test('the Partial threshold is configurable and can be turned off', () => {
+  const env = fresh({ now: new Date('2026-10-04T13:20:00Z') });
+  const s = env.sheets['Check-in Settings'];
+  const row = s.cells.findIndex((r) => r && String(r[0]).startsWith('Partial after')) + 1;
+  assert.equal(s.get(row, 2), '30', 'setup writes the default');
+  s.set(row, 2, '15');
+  assert.equal(ok(env.call('checkIn', 'tok-ana', { code: codeAt(env, 'Hangar 391') })).status, 'Partial');
+  s.set(row, 2, '');
+  env.setTime('2026-10-04T16:00:00Z');
+  assert.equal(ok(env.call('checkIn', 'tok-cara', { code: codeAt(env, 'Hangar 391') })).status, 'Present');
+});
+
 test('the display shows which shift check-ins are going to', () => {
   const env = fresh({ now: new Date('2026-10-04T13:05:00Z') });
   assert.match(display(env, 'Hangar 391').shift, /Shift 2 · Hangar 391/);
@@ -137,9 +159,9 @@ test('each location has its own code; a Hangar code never marks the Online colum
   assert.notEqual(hangar, online);
   ok(env.call('checkIn', 'tok-ana', { code: hangar }));
   ok(env.call('checkIn', 'tok-cara', { code: online }));
-  assert.equal(env.att.get(ROW.ana, COL.oct4s2), 'Present');
+  assert.equal(env.att.get(ROW.ana, COL.oct4s2), 'Partial', '2h10m into the Hangar shift');
   assert.equal(env.att.get(ROW.ana, COL.oct4online), 'Not Present');
-  assert.equal(env.att.get(ROW.cara, COL.oct4online), 'Present');
+  assert.equal(env.att.get(ROW.cara, COL.oct4online), 'Present', '10 min into the Online shift');
   assert.equal(env.att.get(ROW.cara, COL.oct4s2), 'Not Present');
 });
 
@@ -152,7 +174,7 @@ test('a valid code outside any shift time is refused without counting as a wrong
 });
 
 test('check-in never overrides Partial/Unproductive, and repeats are no-ops', () => {
-  const env = fresh({ now: new Date('2026-10-04T11:00:00Z') });
+  const env = fresh({ now: new Date('2026-10-04T10:00:00Z') });
   const r = ok(env.call('checkIn', 'tok-ben', { code: codeAt(env, 'Hangar 391') }));
   assert.equal(r.alreadyMarked, true);
   assert.equal(env.att.get(ROW.ben, COL.oct4s1), 'Partial');

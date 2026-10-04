@@ -26,12 +26,14 @@ var SETTING = {
   TAB: 'Attendance tab',
   OPEN: 'Self check-in enabled (TRUE/FALSE)',
   ADMINS: 'Admin emails (comma-separated)',
+  PARTIAL: 'Partial after (minutes after shift start, blank = never)',
   ORG: 'Organization name'
 };
 var DEFAULT_SETTINGS = [
   [SETTING.TAB, 'Offseason 2026'],
   [SETTING.OPEN, 'TRUE'],
   [SETTING.ADMINS, ''],
+  [SETTING.PARTIAL, '30'],
   [SETTING.ORG, 'SOR']
 ];
 // Column-A labels in the attendance tab (matched case-insensitively by prefix).
@@ -188,9 +190,10 @@ function apiCheckIn_(user, req) {
   }
 
   var student = findStudent_(layout, member.name);
+  var incoming = AttendanceLogic.statusForCheckIn(nowMinutes_(), shift.start, settings.partialAfter);
   return withLock_(function () {
     var cell = sheet.getRange(student.row, shift.col);
-    var result = AttendanceLogic.mergeCheckIn(cell.getValue());
+    var result = AttendanceLogic.mergeCheckIn(cell.getValue(), incoming);
     if (result.changed) {
       cell.setValue(result.status);
       appendLog_([[now, shift.date, shift.label, student.name, result.status, 'Self check-in',
@@ -420,6 +423,7 @@ function getSettings_() {
     attendanceTab: String(get(SETTING.TAB)).trim(),
     selfCheckIn: String(get(SETTING.OPEN)).toUpperCase() !== 'FALSE',
     adminEmails: AttendanceLogic.parseEmailList(get(SETTING.ADMINS)),
+    partialAfter: AttendanceLogic.parseMinutes(get(SETTING.PARTIAL)),
     orgName: String(get(SETTING.ORG) || 'SOR')
   };
 }

@@ -45,6 +45,7 @@
     try {
       const r = await api('checkIn', { code: $('code').value });
       if (r.alreadyMarked) setMsg($('msg'), 'warn', `You're already marked ${r.status} for ${r.shift}.`);
+      else if (r.status === 'Partial') setMsg($('msg'), 'warn', `${r.name}: marked Partial (late) for ${r.shift}`);
       else setMsg($('msg'), 'ok', `✓ ${r.name}: ${r.status} for ${r.shift}`);
       $('code').value = '';
     } catch (e) {
