@@ -1,73 +1,165 @@
 # SOR Attendance System
 
-A mobile-friendly attendance web app that writes straight into a Google Sheet.
-It runs as a Google Apps Script bound to the spreadsheet, so you don't need
-servers, API keys, or service accounts.
+Members check in on their phones and the result goes straight into a Google Sheet.
+Two checks keep it honest:
 
-## What you get
+1. **Google sign-in.** Each member signs in with the Google account listed on
+   the roster. Nobody can type in someone else's name.
+2. **A rotating 6-digit code on a screen in the room.** The code changes every
+   30 seconds, and check-in needs the code that is showing *right now*. Codes
+   are shown as a big number and a QR code, so someone at home has nothing to
+   enter.
+
+```
+ Phone ──Google sign-in──▶ Firebase Auth
+   │  (ID token + code)
+   ▼
+ Firebase Hosting site ──POST──▶ Apps Script API ──▶ Google Sheet
+ (check-in / display / admin)    (verifies token,       Roster · Attendance
+                                  checks code)          Log · Settings
+```
+
+## What's in the sheet
 
 | Sheet | Contents |
 |---|---|
-| **Roster** | `ID · Name · Group · Active`. You maintain this list. |
-| **Attendance** | One row per member and one column per date (`yyyy-MM-dd`). Each cell is `Present`, `Late`, `Absent` or `Excused`, color-coded. |
-| **Log** | Append-only audit trail of every check-in, admin edit and auto-absent mark. |
-| **Settings** | Organization name, late cutoff time, self check-in on/off, auto-absent hour. |
+| **Roster** | `ID · Name · Group · Active · Email`. You maintain this. **Email** must be the member's Google account. |
+| **Attendance** | One row per member and one column per date. Cells are `Present` / `Late` / `Absent` / `Excused`, color-coded. |
+| **Log** | Every check-in, admin edit, auto-absent mark and **rejected code attempt**, with the account email. |
+| **Settings** | Org name, late cutoff, check-in on/off, auto-absent hour, **admin emails**. |
 
-**Web app**
-- **Check in**: a member types their ID or full name (names autocomplete).
-  They are marked `Present`, or `Late` after the cutoff time. Repeat check-ins
-  are ignored, and a check-in never overwrites an `Excused` mark.
-- **Admin** (PIN-protected): pick any date, filter by group, set or correct
-  statuses, bulk-mark unmarked people, and save. Every change is logged.
+## The website
 
-**Sheet menu → Attendance**
-- *Set up sheets*: creates the four sheets. It is safe to re-run.
-- *Set admin PIN…*: the PIN is stored in Script Properties, not in the sheet.
-  The admin is locked out for 10 minutes after 10 wrong attempts.
-- *Mark unmarked as Absent (today)*
-- *Install daily auto-absent trigger*: runs the step above every night.
+| Page | Who | What |
+|---|---|---|
+| `/` | Members | Sign in with Google, then enter the code (or scan the QR, which fills it in automatically). |
+| `/display.html` | Admins | Put this on the projector or a tablet at the door. It shows the live code, a countdown bar and the QR code. |
+| `/admin.html` | Admins | Pick a date or group and fix statuses (Excused, Late, …). Each change is logged with the admin's email. |
 
-## Install (about 5 minutes)
+---
 
-### Option A: copy and paste (no tools needed)
-1. Create a new Google Sheet.
+## Setup (about 20 minutes, one time)
+
+You need a Google account, and Node.js installed on your computer
+(<https://nodejs.org>, LTS version). Node is only used to upload the website.
+
+### Step 1: Google Sheet and script
+
+1. Create a new Google Sheet (for example "SOR Attendance").
 2. Open **Extensions → Apps Script**.
-3. Create files matching `src/`. Paste `Code.js` and `Logic.js` as script
-   files (`Code.gs`, `Logic.gs`) and `Index.html` as an HTML file named `Index`.
-4. Open **Project Settings**, tick *Show "appsscript.json"*, and replace its
-   contents with `src/appsscript.json`.
-5. Reload the sheet. Run **Attendance → Set up sheets** and authorize when prompted.
-6. Fill in **Roster**, then run **Attendance → Set admin PIN…**.
-7. In the Apps Script editor, go to **Deploy → New deployment → Web app**.
-   Set *Execute as: Me* and *Who has access: Anyone* (or *Anyone within your
-   domain*). Share the URL or turn it into a QR code at the door.
+3. Open `Code.gs`, delete what's there, and paste this repo's
+   `src/Code.js`.
+4. Click **+ → Script**, name it `Logic`, and paste `src/Logic.js`.
+5. Click **⚙ Project Settings**, tick **Show "appsscript.json" manifest file**,
+   go back to the editor, open `appsscript.json`, and paste `src/appsscript.json`.
+6. Save (Ctrl/Cmd+S). Go back to the sheet and **reload the page**. An
+   **Attendance** menu appears.
+7. Click **Attendance → Set up sheets**. Google asks for permission:
+   **Continue → choose your account → Advanced → Go to (project) (unsafe) → Allow**.
+   It says "unsafe" only because this is your own unpublished script.
+8. Open the **Roster** sheet and replace the example rows with your members.
+   Fill in each person's **Google email**.
+9. Open the **Settings** sheet. **Admin emails** already contains your email.
+   Add other admins, separated by commas.
 
-### Option B: `clasp` from this repo
+### Step 2: Firebase project (for Google sign-in and hosting)
+
+1. Go to <https://console.firebase.google.com> → **Create a project**. Name it
+   (for example `sor-attendance`). You can turn Google Analytics off.
+2. Left menu: **Build → Authentication → Get started → Sign-in method → Google →
+   Enable**. Pick a support email and click **Save**.
+3. Click **⚙ (Project settings) → General**. Under **Your apps**, click the
+   **Web `</>`** icon, give it a nickname, and click **Register app**. You don't
+   need to tick Hosting here.
+4. Firebase shows a `firebaseConfig = { … }` block. Open `public/config.js` in
+   this repo and copy `apiKey`, `authDomain`, `projectId` and `appId` into the
+   `firebase` section.
+5. Back in the Google Sheet: **Attendance → Set Firebase API key…**. Paste the
+   same `apiKey` value. The script uses it to check that sign-ins really came
+   from your Firebase project.
+
+### Step 3: Publish the script as an API
+
+1. In the Apps Script editor: **Deploy → New deployment**. Click ⚙ next to
+   "Select type" and choose **Web app**.
+2. Set **Execute as: Me** and **Who has access: Anyone**. It must be *Anyone*,
+   not "Anyone with Google account", or the website can't reach it. The script
+   does its own sign-in check.
+3. Click **Deploy** and authorize again if asked. Copy the **Web app URL**
+   (ends in `/exec`).
+4. Paste it into `public/config.js` as `scriptUrl`.
+
+### Step 4: Upload the website
+
+In a terminal, inside this repo folder:
+
 ```bash
-npm i -g @google/clasp && clasp login
-cp .clasp.json.example .clasp.json   # paste the Script ID from Apps Script → Project Settings
-npm run push                         # then do steps 5–7 above
+npm install -g firebase-tools
+firebase login
+firebase use --add            # pick your project, alias: default
+firebase deploy --only hosting
 ```
 
-After editing code, use **Deploy → Manage deployments → Edit → New version**
-so the existing URL keeps working.
+It prints your site address, for example `https://sor-attendance.web.app`.
 
-## Configuration (Settings sheet)
-- **Late after (HH:mm)**: check-ins after this time count as `Late`. Leave it
-  blank to disable.
-- **Self check-in enabled**: set it to `FALSE` to close check-in. Admin
-  editing still works.
-- **Auto-mark absent time (hour 0-23)**: used when you install the daily trigger.
+### Step 5: Try it
 
-Times use the spreadsheet's time zone (**File → Settings**).
+1. On a laptop or projector, open `https://<your-site>/display.html`, sign in
+   with an admin account, and click **Full screen**.
+2. On your phone, scan the QR code and sign in with a Google account that is on
+   the Roster. You should see ✓ *Present*, and the **Attendance** sheet fills in.
+3. Optional: run **Attendance → Install daily auto-absent trigger** so anyone
+   who didn't check in is marked `Absent` each night.
 
-## Security notes
-- Anyone with the link can check in **any** roster member by name or ID. If
-  that matters, give members non-guessable IDs and restrict deployment
-  access to your Google Workspace domain.
-- Admin actions require the PIN on every request, checked server-side.
+---
+
+## Day-to-day
+
+- **Start of class:** open the display page. With no display open, nobody can
+  check in.
+- **Close check-in:** set *Self check-in enabled* to `FALSE` in Settings.
+- **Late:** check-ins after *Late after (HH:mm)* count as `Late`. Leave it
+  blank to disable. Times use the sheet's time zone (**File → Settings**).
+- **New member:** add a row to Roster with their Google email. No redeploy needed.
+- **Someone can't check in:** an admin marks them on `/admin.html`.
+
+## Updating the code later
+
+- **Script changes:** paste the new code, then **Deploy → Manage deployments →
+  ✏️ Edit → Version: New version → Deploy**. The URL stays the same. A plain
+  *New deployment* creates a new URL.
+- **Website changes:** run `firebase deploy --only hosting`.
+- Optional: use `clasp` (`npm i -g @google/clasp`, copy `.clasp.json.example`
+  to `.clasp.json` with your Script ID, then `npm run push`) instead of
+  copy-pasting.
+
+## Troubleshooting
+
+| Message | Fix |
+|---|---|
+| *Server not configured: run Attendance > Set Firebase API key…* | Do Step 2.5. |
+| *Your sign-in expired* on every request | The key from Step 2.5 must be the same `apiKey` as in `config.js`. If you restricted that key in Google Cloud, do **not** use an "HTTP referrers" restriction, because the script calls it from Google's servers. |
+| *Server error* / *Failed to fetch* | Check `scriptUrl` ends in `/exec`, and that the deployment's access is **Anyone**. |
+| *… isn't on the roster* | The Email cell must match the Google account exactly, and **Active** must be ticked. |
+| *auth/unauthorized-domain* | If you use a custom domain, add it under Firebase **Authentication → Settings → Authorized domains**. |
+| *Too many wrong codes* | 5 wrong codes lock that account for 10 minutes. The Log sheet shows each attempt. |
+
+## What this does and doesn't stop
+
+- ✅ **Checking in from home.** The code is only visible in the room and dies
+  within 30–60 seconds.
+- ✅ **Checking in a friend by typing their name.** You can only check in as the
+  Google account you're signed into.
+- ✅ **Guessing codes.** Codes come from a secret on the server, and there are
+  5 tries per 10 minutes.
+- ⚠️ **Someone in the room texting the code to a friend** who checks in within
+  about a minute is still possible. The Log records exact check-in times and
+  emails, so it leaves a trail.
+- ⚠️ **Someone signing in on their phone with a friend's Google password.**
+  Nothing short of in-person checks stops that.
 
 ## Development
+
 ```bash
-npm test   # logic unit tests plus server tests against an in-memory fake of SpreadsheetApp
+npm test   # logic + API tests against an in-memory fake of Sheets, token check and HMAC
 ```

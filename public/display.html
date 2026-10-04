@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attendance Display</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+</head>
+<body class="display">
+<main>
+  <section class="card" id="auth"></section>
+  <div class="signed-in hidden">
+    <h1 id="title">Check in</h1>
+    <p class="hint">Scan the QR code, or go to <b id="site"></b> and enter:</p>
+    <div class="bigcode" id="code">······</div>
+    <div class="bar"><div id="bar"></div></div>
+    <div id="qr"></div>
+    <p class="hint" id="err"></p>
+    <p><button class="btn secondary" id="fs" style="width:auto;padding:8px 16px">Full screen</button></p>
+  </div>
+</main>
+
+<script src="config.js"></script>
+<script type="module">
+  import { $, api, requireSignIn } from './app.js';
+
+  const base = location.origin + location.pathname.replace(/display\.html$/, '');
+  $('site').textContent = location.host;
+  let deadline = 0, step = 30, timer = null;
+
+  function showQr(code) {
+    const qr = qrcode(0, 'M');
+    qr.addData(base + '?code=' + code);
+    qr.make();
+    $('qr').innerHTML = qr.createImgTag(8, 0);
+  }
+
+  async function refresh() {
+    clearTimeout(timer);
+    try {
+      const d = await api('displayCode');
+      $('title').textContent = d.orgName + ': check in';
+      $('code').textContent = d.code.replace(/(\d{3})(\d{3})/, '$1 $2');
+      showQr(d.code);
+      $('err').textContent = '';
+      step = d.stepSeconds;
+      deadline = Date.now() + d.expiresInMs;
+      timer = setTimeout(refresh, d.expiresInMs + 250);
+    } catch (e) {
+      $('err').textContent = e.message;
+      timer = setTimeout(refresh, 5000);
+    }
+  }
+
+  (function tick() {
+    const left = Math.max(0, deadline - Date.now());
+    $('bar').style.width = (left / (step * 1000) * 100) + '%';
+    requestAnimationFrame(tick);
+  })();
+
+  $('fs').onclick = () => document.documentElement.requestFullscreen?.();
+  requireSignIn(refresh);
+</script>
+</body>
+</html>

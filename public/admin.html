@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attendance Admin</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>Attendance admin</h1>
+  <p class="sub"><a href="./">← Check-in</a> · <a href="display.html">Display</a></p>
+  <section class="card" id="auth"></section>
+
+  <section class="card signed-in hidden">
+    <div class="row">
+      <div><label for="date">Date</label><input id="date" type="date"></div>
+      <div><label for="filter">Group</label><select id="filter"></select></div>
+    </div>
+    <button class="btn secondary" id="load">Load</button>
+    <div id="msg" class="msg"></div>
+
+    <div id="day" class="hidden">
+      <div class="summary" id="summary"></div>
+      <div class="bulk">
+        <span>Set all shown unmarked to:</span>
+        <button data-bulk="Present">Present</button>
+        <button data-bulk="Absent">Absent</button>
+      </div>
+      <table>
+        <thead><tr><th>Name</th><th>Status</th><th>Group</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <button class="btn" id="save">Save changes</button>
+    </div>
+  </section>
+</main>
+
+<script src="config.js"></script>
+<script type="module">
+  import { $, api, esc, setMsg, requireSignIn } from './app.js';
+
+  let statuses = [], day = null, edits = {};
+
+  const statusOf = (m) => (m.id in edits ? edits[m.id] : m.status);
+  const visible = () => day.members.filter((m) => !$('filter').value || m.group === $('filter').value);
+
+  function setStatus(id, status) {
+    const m = day.members.find((x) => x.id === id);
+    if (m.status === status) delete edits[id]; else edits[id] = status;
+  }
+
+  function render() {
+    if (!day) return;
+    const opts = [''].concat(statuses);
+    $('rows').innerHTML = visible().map((m) => {
+      const s = statusOf(m);
+      return `<tr class="${m.id in edits ? 'changed' : ''}">
+        <td>${esc(m.name)}<br><small>${esc(m.id)}</small></td>
+        <td><select data-id="${esc(m.id)}">${opts.map((o) =>
+          `<option value="${o}"${o === s ? ' selected' : ''}>${o || '—'}</option>`).join('')}</select></td>
+        <td>${esc(m.group)}</td></tr>`;
+    }).join('');
+    const counts = { Present: 0, Late: 0, Absent: 0, Excused: 0, Unmarked: 0 };
+    day.members.forEach((m) => counts[statusOf(m) || 'Unmarked']++);
+    $('summary').innerHTML = Object.entries(counts)
+      .map(([k, v]) => `<span class="pill">${k}: ${v}</span>`).join('');
+  }
+
+  async function load(quiet) {
+    if (!quiet && Object.keys(edits).length && !confirm('Discard unsaved changes?')) return;
+    if (!quiet) setMsg($('msg'), 'ok', 'Loading…');
+    try {
+      day = await api('getDay', { date: $('date').value });
+      edits = {};
+      if (!quiet) $('msg').className = 'msg';
+      const groups = [...new Set(day.members.map((m) => m.group).filter(Boolean))].sort();
+      const current = $('filter').value;
+      $('filter').innerHTML = '<option value="">All groups</option>' + groups
+        .map((g) => `<option${g === current ? ' selected' : ''}>${esc(g)}</option>`).join('');
+      $('day').classList.remove('hidden');
+      render();
+    } catch (e) {
+      setMsg($('msg'), 'err', e.message);
+    }
+  }
+
+  async function save() {
+    const records = Object.entries(edits).map(([id, status]) => ({ id, status }));
+    if (!records.length) return setMsg($('msg'), 'warn', 'No changes to save.');
+    $('save').disabled = true;
+    try {
+      const r = await api('saveDay', { date: day.date, records });
+      setMsg($('msg'), 'ok', `Saved ${r.saved} change(s) to the sheet.`);
+      await load(true);
+    } catch (e) {
+      setMsg($('msg'), 'err', e.message);
+    } finally {
+      $('save').disabled = false;
+    }
+  }
+
+  $('rows').addEventListener('change', (e) => { setStatus(e.target.dataset.id, e.target.value); render(); });
+  document.querySelectorAll('[data-bulk]').forEach((b) => b.addEventListener('click', () => {
+    visible().forEach((m) => { if (!statusOf(m)) setStatus(m.id, b.dataset.bulk); });
+    render();
+  }));
+  $('filter').addEventListener('change', render);
+  $('load').addEventListener('click', () => load(false));
+  $('save').addEventListener('click', save);
+
+  requireSignIn(async () => {
+    try {
+      const me = await api('me');
+      if (!me.isAdmin) return setMsg($('msg'), 'err', 'This account is not an admin.');
+      statuses = me.statuses;
+      if (!$('date').value) $('date').value = me.today;
+      load(true);
+    } catch (e) {
+      setMsg($('msg'), 'err', e.message);
+    }
+  });
+</script>
+</body>
+</html>

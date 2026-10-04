@@ -39,15 +39,43 @@ var AttendanceLogic = (function () {
     return String(s == null ? '' : s).trim().replace(/\s+/g, ' ').toLowerCase();
   }
 
-  /** Finds a roster member by exact ID or exact name (case-insensitive). */
-  function findMember(roster, query) {
-    var q = normalize(query);
-    if (!q) return null;
+  /** Finds a roster member by Google account email (case-insensitive). */
+  function findMemberByEmail(roster, email) {
+    var e = normalize(email);
+    if (!e) return null;
     for (var i = 0; i < roster.length; i++) {
-      if (normalize(roster[i].id) === q) return roster[i];
+      if (normalize(roster[i].email) === e) return roster[i];
     }
-    var byName = roster.filter(function (m) { return normalize(m.name) === q; });
-    return byName.length === 1 ? byName[0] : null;
+    return null;
+  }
+
+  /** Index of the rotating-code time window containing nowMs. */
+  function timeStep(nowMs, stepSeconds) {
+    return Math.floor(nowMs / 1000 / stepSeconds);
+  }
+
+  /**
+   * RFC 4226 dynamic truncation of an HMAC into a numeric code.
+   * Accepts signed bytes (as Apps Script returns them) or unsigned.
+   */
+  function truncateToCode(hmacBytes, digits) {
+    var b = hmacBytes.map(function (x) { return x & 0xff; });
+    var offset = b[b.length - 1] & 0x0f;
+    var bin = ((b[offset] & 0x7f) << 24) | (b[offset + 1] << 16) |
+      (b[offset + 2] << 8) | b[offset + 3];
+    var code = String(bin % Math.pow(10, digits));
+    while (code.length < digits) code = '0' + code;
+    return code;
+  }
+
+  /** Strips spaces and anything else that is not a digit. */
+  function normalizeCode(input) {
+    return String(input == null ? '' : input).replace(/\D/g, '');
+  }
+
+  function parseEmailList(value) {
+    return String(value == null ? '' : value).split(/[\s,;]+/)
+      .map(normalize).filter(Boolean);
   }
 
   /**
@@ -87,7 +115,11 @@ var AttendanceLogic = (function () {
     isValidDateKey: isValidDateKey,
     parseTime: parseTime,
     statusForCheckIn: statusForCheckIn,
-    findMember: findMember,
+    findMemberByEmail: findMemberByEmail,
+    timeStep: timeStep,
+    truncateToCode: truncateToCode,
+    normalizeCode: normalizeCode,
+    parseEmailList: parseEmailList,
     mergeCheckIn: mergeCheckIn,
     insertionIndexForDate: insertionIndexForDate,
     summarize: summarize

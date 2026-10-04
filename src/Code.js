@@ -1,8 +1,12 @@
 /**
- * SOR Attendance System — server side (Google Apps Script, bound to a Sheet).
+ * SOR Attendance System — API (Google Apps Script, bound to a Sheet).
+ *
+ * The web pages live on Firebase Hosting and call doPost() with a Firebase
+ * ID token from Google sign-in. Check-ins also need the rotating code shown
+ * on the in-room display, so nobody can check in from home.
  *
  * Sheets:
- *   Roster      ID | Name | Group | Active        (you maintain this)
+ *   Roster      ID | Name | Group | Active | Email (you maintain this)
  *   Attendance  ID | Name | Group | <yyyy-MM-dd>… (one column per day)
  *   Log         every check-in / admin change, append-only
  *   Settings    key/value configuration
@@ -14,7 +18,7 @@ var SHEET = {
   LOG: 'Log',
   SETTINGS: 'Settings'
 };
-var ROSTER_HEADERS = ['ID', 'Name', 'Group', 'Active'];
+var ROSTER_HEADERS = ['ID', 'Name', 'Group', 'Active', 'Email'];
 var ATTENDANCE_HEADERS = ['ID', 'Name', 'Group'];
 var LOG_HEADERS = ['Timestamp', 'Date', 'ID', 'Name', 'Status', 'Source', 'Note'];
 var FIRST_DATE_COL = ATTENDANCE_HEADERS.length + 1; // 1-based
@@ -22,7 +26,8 @@ var DEFAULT_SETTINGS = [
   ['Organization name', 'SOR'],
   ['Late after (HH:mm, blank = never late)', '09:15'],
   ['Self check-in enabled (TRUE/FALSE)', true],
-  ['Auto-mark absent time (hour 0-23)', 23]
+  ['Auto-mark absent time (hour 0-23)', 23],
+  ['Admin emails (comma-separated)', '']
 ];
 var STATUS_COLORS = {
   Present: '#d9ead3',
@@ -30,7 +35,10 @@ var STATUS_COLORS = {
   Absent: '#f4cccc',
   Excused: '#cfe2f3'
 };
-var MAX_PIN_FAILURES = 10;
+var CODE_STEP_SECONDS = 30; // a code is accepted for its window plus the previous one
+var CODE_DIGITS = 6;
+var MAX_CODE_FAILURES = 5;  // per account per 10 minutes
+var TOKEN_CACHE_SECONDS = 300;
 
 // ---------------------------------------------------------------- Menu / setup
 
@@ -38,7 +46,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Attendance')
     .addItem('Set up sheets', 'setup')
-    .addItem('Set admin PIN…', 'promptAdminPin')
+    .addItem('Set Firebase API key…', 'promptFirebaseApiKey')
     .addSeparator()
     .addItem('Mark unmarked as Absent (today)', 'markAbsentToday')
     .addItem('Install daily auto-absent trigger', 'installDailyTrigger')
@@ -50,9 +58,9 @@ function setup() {
 
   var roster = getOrCreateSheet_(ss, SHEET.ROSTER, ROSTER_HEADERS);
   if (roster.getLastRow() < 2) {
-    roster.getRange(2, 1, 2, 4).setValues([
-      ['S001', 'Example Member', 'Group A', true],
-      ['S002', 'Another Member', 'Group B', true]
+    roster.getRange(2, 1, 2, 5).setValues([
+      ['S001', 'Example Member', 'Group A', true, 'member1@gmail.com'],
+      ['S002', 'Another Member', 'Group B', true, 'member2@gmail.com']
     ]);
   }
   roster.getRange('D2:D').insertCheckboxes();
@@ -67,28 +75,30 @@ function setup() {
   var existing = settings.getRange(1, 1, settings.getLastRow(), 1).getValues()
     .map(function (r) { return r[0]; });
   DEFAULT_SETTINGS.forEach(function (row) {
-    if (existing.indexOf(row[0]) === -1) settings.appendRow([row[0], String(row[1])]);
+    if (existing.indexOf(row[0]) !== -1) return;
+    var value = row[1];
+    if (row[0].indexOf('Admin emails') === 0) value = Session.getEffectiveUser().getEmail();
+    settings.appendRow([row[0], String(value)]);
   });
+  getCodeSecret_();
 
   syncAttendanceRows_(att, getActiveRoster_());
   SpreadsheetApp.getUi().alert(
-    'Setup complete.\n\n1. Fill in the Roster sheet.\n' +
-    '2. Attendance > Set admin PIN…\n' +
-    '3. Deploy > New deployment > Web app to get the check-in link.');
+    'Setup complete.\n\n1. Fill in the Roster sheet (including each Google email).\n' +
+    '2. Attendance > Set Firebase API key…\n' +
+    '3. Deploy > New deployment > Web app, then put its URL in the site config.');
 }
 
-function promptAdminPin() {
+function promptFirebaseApiKey() {
   var ui = SpreadsheetApp.getUi();
-  var res = ui.prompt('Admin PIN', 'Enter a new admin PIN (at least 4 characters):',
+  var res = ui.prompt('Firebase API key',
+    'Paste the Web API key from Firebase console > Project settings > General:',
     ui.ButtonSet.OK_CANCEL);
   if (res.getSelectedButton() !== ui.Button.OK) return;
-  var pin = res.getResponseText().trim();
-  if (pin.length < 4) {
-    ui.alert('PIN must be at least 4 characters.');
-    return;
-  }
-  PropertiesService.getScriptProperties().setProperty('ADMIN_PIN', pin);
-  ui.alert('Admin PIN saved.');
+  var key = res.getResponseText().trim();
+  if (!key) return;
+  PropertiesService.getScriptProperties().setProperty('FIREBASE_API_KEY', key);
+  ui.alert('Firebase API key saved.');
 }
 
 function installDailyTrigger() {
@@ -102,39 +112,74 @@ function installDailyTrigger() {
     (isNaN(hour) ? 23 : hour) + ':00).');
 }
 
-// ---------------------------------------------------------------- Web app
+// ---------------------------------------------------------------- API
+
+var ACTIONS = {
+  me: apiMe_,
+  checkIn: apiCheckIn_,
+  displayCode: apiDisplayCode_,
+  getDay: apiGetDay_,
+  saveDay: apiSaveDay_
+};
 
 function doGet() {
-  var settings = getSettings_();
-  return HtmlService.createTemplateFromFile('Index')
-    .evaluate()
-    .setTitle(settings.orgName + ' Attendance')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  return json_({ ok: true, message: 'SOR attendance API is running.' });
 }
 
-/** Public: configuration and names for the check-in page. */
-function getAppConfig() {
+/** Body: {"action": "...", "idToken": "<Firebase ID token>", ...params} */
+function doPost(e) {
+  try {
+    var req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    if (!ACTIONS.hasOwnProperty(req.action)) throw new Error('Unknown action.');
+    var user = verifyIdToken_(req.idToken);
+    return json_({ ok: true, data: ACTIONS[req.action](user, req) });
+  } catch (err) {
+    return json_({ ok: false, error: String((err && err.message) || err) });
+  }
+}
+
+function apiMe_(user) {
   var settings = getSettings_();
+  var member = AttendanceLogic.findMemberByEmail(getActiveRoster_(), user.email);
   return {
     orgName: settings.orgName,
     today: todayKey_(),
+    email: user.email,
+    member: member,
+    isAdmin: isAdmin_(user, settings),
     selfCheckIn: settings.selfCheckIn,
-    statuses: AttendanceLogic.STATUSES,
-    names: getActiveRoster_().map(function (m) { return m.name; })
+    statuses: AttendanceLogic.STATUSES
   };
 }
 
-/** Public: a member checks themselves in by ID or full name. */
-function checkIn(query) {
+/** The signed-in member checks in with the code currently on the display. */
+function apiCheckIn_(user, req) {
   var settings = getSettings_();
-  if (!settings.selfCheckIn) throw new Error('Self check-in is currently closed.');
+  if (!settings.selfCheckIn) throw new Error('Check-in is currently closed.');
 
-  var member = AttendanceLogic.findMember(getActiveRoster_(), query);
-  if (!member) throw new Error('No active member matches "' + query + '". Check your ID or full name.');
+  var member = AttendanceLogic.findMemberByEmail(getActiveRoster_(), user.email);
+  if (!member) {
+    throw new Error(user.email + ' is not on the roster. Ask an admin to add this email.');
+  }
 
   var now = new Date();
   var tz = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
   var dateKey = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+
+  var cache = CacheService.getScriptCache();
+  var failKey = 'codefail_' + user.email;
+  var failures = Number(cache.get(failKey) || 0);
+  if (failures >= MAX_CODE_FAILURES) {
+    throw new Error('Too many wrong codes. Wait 10 minutes and try again.');
+  }
+  var code = AttendanceLogic.normalizeCode(req.code);
+  if (!isCurrentCode_(code, now.getTime())) {
+    cache.put(failKey, String(failures + 1), 600);
+    appendLog_([[now, dateKey, member.id, member.name, 'Rejected', 'Self check-in',
+      'wrong or expired code "' + code + '"']]);
+    throw new Error('That code is wrong or has expired. Enter the code on the screen right now.');
+  }
+
   var minutes = AttendanceLogic.parseTime(Utilities.formatDate(now, tz, 'HH:mm'));
   var incoming = AttendanceLogic.statusForCheckIn(minutes, settings.lateCutoff);
 
@@ -146,7 +191,8 @@ function checkIn(query) {
     var result = AttendanceLogic.mergeCheckIn(String(cell.getValue()), incoming);
     if (result.changed) {
       cell.setValue(result.status);
-      appendLog_([[now, dateKey, member.id, member.name, result.status, 'Self check-in', '']]);
+      appendLog_([[now, dateKey, member.id, member.name, result.status, 'Self check-in',
+        user.email]]);
     }
     return {
       name: member.name,
@@ -157,9 +203,23 @@ function checkIn(query) {
   });
 }
 
+/** Admin: the code to show on the in-room display. */
+function apiDisplayCode_(user) {
+  requireAdmin_(user);
+  var nowMs = new Date().getTime();
+  var step = AttendanceLogic.timeStep(nowMs, CODE_STEP_SECONDS);
+  return {
+    code: codeForStep_(step),
+    expiresInMs: (step + 1) * CODE_STEP_SECONDS * 1000 - nowMs,
+    stepSeconds: CODE_STEP_SECONDS,
+    orgName: getSettings_().orgName
+  };
+}
+
 /** Admin: roster with statuses for a date. */
-function adminGetDay(pin, dateKey) {
-  verifyAdmin_(pin);
+function apiGetDay_(user, req) {
+  requireAdmin_(user);
+  var dateKey = req.date;
   assertDateKey_(dateKey);
   var att = SpreadsheetApp.getActive().getSheetByName(SHEET.ATTENDANCE);
   var roster = getActiveRoster_();
@@ -179,9 +239,11 @@ function adminGetDay(pin, dateKey) {
   };
 }
 
-/** Admin: save statuses for a date. records = [{id, status}] */
-function adminSaveDay(pin, dateKey, records) {
-  verifyAdmin_(pin);
+/** Admin: save statuses for a date. req.records = [{id, status}] */
+function apiSaveDay_(user, req) {
+  requireAdmin_(user);
+  var dateKey = req.date;
+  var records = req.records || [];
   assertDateKey_(dateKey);
   records.forEach(function (r) {
     if (!AttendanceLogic.isValidStatus(r.status)) throw new Error('Invalid status: ' + r.status);
@@ -205,8 +267,8 @@ function adminSaveDay(pin, dateKey, records) {
       var before = String(values[row - 1][0] || '');
       if (before === r.status) return;
       values[row - 1][0] = r.status;
-      logRows.push([now, dateKey, r.id, byId[r.id].name, r.status || '(cleared)', 'Admin',
-        before ? 'was ' + before : '']);
+      logRows.push([now, dateKey, r.id, byId[r.id].name, r.status || '(cleared)',
+        'Admin ' + user.email, before ? 'was ' + before : '']);
     });
 
     range.setValues(values);
@@ -290,7 +352,8 @@ function getSettings_() {
     orgName: String(get(0) || 'SOR'),
     lateCutoff: AttendanceLogic.parseTime(lateRaw),
     selfCheckIn: String(get(2)).toUpperCase() !== 'FALSE',
-    autoAbsentHour: get(3)
+    autoAbsentHour: get(3),
+    adminEmails: AttendanceLogic.parseEmailList(get(4))
   };
 }
 
@@ -299,7 +362,7 @@ function getActiveRoster_() {
   if (!sheet) throw new Error('Roster sheet missing. Run Attendance > Set up sheets.');
   if (sheet.getLastRow() < 2) return [];
   var seen = {};
-  return sheet.getRange(2, 1, sheet.getLastRow() - 1, 4).getValues()
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, ROSTER_HEADERS.length).getValues()
     .filter(function (r) {
       var id = String(r[0]).trim();
       var active = r[3] === true || String(r[3]).toUpperCase() === 'TRUE';
@@ -308,7 +371,12 @@ function getActiveRoster_() {
       return true;
     })
     .map(function (r) {
-      return { id: String(r[0]).trim(), name: String(r[1]).trim(), group: String(r[2]).trim() };
+      return {
+        id: String(r[0]).trim(),
+        name: String(r[1]).trim(),
+        group: String(r[2]).trim(),
+        email: String(r[4]).trim().toLowerCase()
+      };
     });
 }
 
@@ -375,18 +443,80 @@ function appendLog_(rows) {
   log.getRange(log.getLastRow() + 1, 1, rows.length, LOG_HEADERS.length).setValues(rows);
 }
 
-function verifyAdmin_(pin) {
+/**
+ * Verifies a Firebase ID token with Google and returns {email, name}.
+ * The API key ties the token to your Firebase project.
+ */
+function verifyIdToken_(idToken) {
+  if (!idToken) throw new Error('Please sign in.');
+  var apiKey = PropertiesService.getScriptProperties().getProperty('FIREBASE_API_KEY');
+  if (!apiKey) throw new Error('Server not configured: run Attendance > Set Firebase API key…');
+
   var cache = CacheService.getScriptCache();
-  var failures = Number(cache.get('pin_failures') || 0);
-  if (failures >= MAX_PIN_FAILURES) {
-    throw new Error('Too many wrong PIN attempts. Try again in 10 minutes.');
+  var cacheKey = 'tok_' + Utilities.base64EncodeWebSafe(
+    Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, idToken));
+  var cached = cache.get(cacheKey);
+  if (cached) return JSON.parse(cached);
+
+  var res = UrlFetchApp.fetch(
+    'https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=' + encodeURIComponent(apiKey),
+    {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({ idToken: idToken }),
+      muteHttpExceptions: true
+    });
+  if (res.getResponseCode() !== 200) throw new Error('Your sign-in expired. Please sign in again.');
+  var account = (JSON.parse(res.getContentText()).users || [])[0];
+  if (!account || !account.email || !account.emailVerified) {
+    throw new Error('Please sign in with a verified Google account.');
   }
-  var expected = PropertiesService.getScriptProperties().getProperty('ADMIN_PIN');
-  if (!expected) throw new Error('Admin PIN not set. In the sheet: Attendance > Set admin PIN…');
-  if (String(pin) !== expected) {
-    cache.put('pin_failures', String(failures + 1), 600);
-    throw new Error('Wrong PIN.');
+  var user = { email: account.email.toLowerCase(), name: account.displayName || '' };
+  cache.put(cacheKey, JSON.stringify(user), TOKEN_CACHE_SECONDS);
+  return user;
+}
+
+function isAdmin_(user, settings) {
+  return settings.adminEmails.indexOf(user.email) !== -1;
+}
+
+function requireAdmin_(user) {
+  if (!isAdmin_(user, getSettings_())) throw new Error('Admins only.');
+}
+
+function getCodeSecret_() {
+  var props = PropertiesService.getScriptProperties();
+  var secret = props.getProperty('CODE_SECRET');
+  if (secret) return secret;
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    secret = props.getProperty('CODE_SECRET');
+    if (!secret) {
+      secret = Utilities.getUuid() + Utilities.getUuid();
+      props.setProperty('CODE_SECRET', secret);
+    }
+    return secret;
+  } finally {
+    lock.releaseLock();
   }
+}
+
+function codeForStep_(step) {
+  var sig = Utilities.computeHmacSha256Signature(String(step), getCodeSecret_());
+  return AttendanceLogic.truncateToCode(sig, CODE_DIGITS);
+}
+
+/** Accepts the current window's code and the previous one (for slow typists). */
+function isCurrentCode_(code, nowMs) {
+  if (code.length !== CODE_DIGITS) return false;
+  var step = AttendanceLogic.timeStep(nowMs, CODE_STEP_SECONDS);
+  return code === codeForStep_(step) || code === codeForStep_(step - 1);
+}
+
+function json_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 function assertDateKey_(dateKey) {

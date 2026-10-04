@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attendance Check-in</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1 id="title">Attendance</h1>
+  <p class="sub" id="today"></p>
+
+  <section class="card" id="auth"></section>
+
+  <section class="card signed-in hidden" id="checkin-card">
+    <p id="member-line"></p>
+    <form id="checkin-form">
+      <label for="code">Code on the screen</label>
+      <input id="code" class="code" inputmode="numeric" autocomplete="one-time-code"
+             maxlength="7" placeholder="000000" required>
+      <button class="btn" id="checkin-btn" type="submit">Check in</button>
+    </form>
+    <div id="msg" class="msg"></div>
+  </section>
+
+  <section class="card signed-in hidden" id="admin-links" hidden>
+    <b>Admin</b>
+    <div class="links"><a href="display.html">Open display (code + QR)</a><a href="admin.html">Edit attendance</a></div>
+  </section>
+</main>
+
+<script src="config.js"></script>
+<script type="module">
+  import { $, api, esc, setMsg, requireSignIn } from './app.js';
+
+  const params = new URLSearchParams(location.search);
+  const scannedCode = params.get('code');
+  if (scannedCode) $('code').value = scannedCode;
+
+  async function submit() {
+    const btn = $('checkin-btn');
+    btn.disabled = true;
+    setMsg($('msg'), 'ok', 'Checking in…');
+    try {
+      const r = await api('checkIn', { code: $('code').value });
+      if (r.alreadyMarked) setMsg($('msg'), 'warn', `You're already marked ${r.status} today.`);
+      else setMsg($('msg'), r.status === 'Late' ? 'warn' : 'ok', `✓ ${r.name}: ${r.status} at ${r.time}`);
+      $('code').value = '';
+    } catch (e) {
+      setMsg($('msg'), 'err', e.message);
+      $('code').value = '';
+      $('code').focus();
+    } finally {
+      btn.disabled = false;
+      history.replaceState(null, '', location.pathname); // drop the scanned code from the URL
+    }
+  }
+
+  $('checkin-form').addEventListener('submit', (e) => { e.preventDefault(); submit(); });
+
+  requireSignIn(async () => {
+    try {
+      const me = await api('me');
+      $('title').textContent = me.orgName + ' Attendance';
+      $('today').textContent = 'Today: ' + me.today;
+      $('admin-links').hidden = !me.isAdmin;
+      if (!me.member) {
+        $('member-line').innerHTML = `<b>${esc(me.email)}</b> isn't on the roster. Ask an admin to add it.`;
+        $('checkin-form').classList.add('hidden');
+        return;
+      }
+      $('member-line').innerHTML = `Hi <b>${esc(me.member.name)}</b> (${esc(me.member.id)})`;
+      if (!me.selfCheckIn) {
+        $('checkin-btn').disabled = true;
+        setMsg($('msg'), 'warn', 'Check-in is currently closed.');
+        return;
+      }
+      if (scannedCode) submit();
+    } catch (e) {
+      setMsg($('msg'), 'err', e.message);
+    }
+  });
+</script>
+</body>
+</html>

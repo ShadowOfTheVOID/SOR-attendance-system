@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const crypto = require('node:crypto');
 
 class FakeRange {
   constructor(sheet, row, col, nr, nc) { Object.assign(this, { sheet, row, col, nr, nc }); }
@@ -70,7 +71,10 @@ class FakeSheet {
   getName() { return this.name; }
 }
 
-function load({ now = new Date('2026-10-05T09:00:00Z'), adminPin = '1234' } = {}) {
+const toSigned = (buf) => Array.from(buf).map((b) => (b > 127 ? b - 256 : b));
+
+// tokens: { idToken: { email, emailVerified, displayName } } accepted by the fake lookup API.
+function load({ now = new Date('2026-10-05T09:00:00Z'), tokens = {}, apiKey = 'test-key' } = {}) {
   const sheets = {};
   const ss = {
     getSheetByName: (n) => sheets[n] || null,
@@ -78,7 +82,8 @@ function load({ now = new Date('2026-10-05T09:00:00Z'), adminPin = '1234' } = {}
     getSpreadsheetTimeZone: () => 'Etc/UTC',
     toast() {}
   };
-  const props = { ADMIN_PIN: adminPin };
+  const props = apiKey ? { FIREBASE_API_KEY: apiKey } : {};
+  const fetches = [];
   const cache = {};
   const rule = () => {
     const b = { whenTextEqualTo: () => b, setBackground: () => b, setRanges: () => b, build: () => ({}) };
@@ -87,6 +92,7 @@ function load({ now = new Date('2026-10-05T09:00:00Z'), adminPin = '1234' } = {}
   const RealDate = Date;
   class FixedDate extends RealDate {
     constructor(...a) { if (a.length) super(...a); else super(clock.now); }
+    static now() { return clock.now; }
   }
   const clock = { now: now.getTime() };
 
@@ -104,9 +110,29 @@ function load({ now = new Date('2026-10-05T09:00:00Z'), adminPin = '1234' } = {}
         if (fmt === 'yyyy-MM-dd') return iso.slice(0, 10);
         if (fmt === 'HH:mm') return iso.slice(11, 16);
         throw new Error('unsupported format ' + fmt);
+      },
+      DigestAlgorithm: { SHA_256: 'sha256' },
+      computeDigest: (alg, v) => toSigned(crypto.createHash(alg).update(v).digest()),
+      computeHmacSha256Signature: (v, key) => toSigned(crypto.createHmac('sha256', key).update(v).digest()),
+      base64EncodeWebSafe: (bytes) => Buffer.from(bytes.map((b) => b & 255)).toString('base64url'),
+      getUuid: () => crypto.randomUUID()
+    },
+    Session: { getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }) },
+    UrlFetchApp: {
+      fetch(url, opts) {
+        fetches.push(url);
+        const key = new URL(url).searchParams.get('key');
+        const account = tokens[JSON.parse(opts.payload).idToken];
+        const ok = key === apiKey && account;
+        const body = ok ? { users: [account] } : { error: { message: 'INVALID_ID_TOKEN' } };
+        return { getResponseCode: () => (ok ? 200 : 400), getContentText: () => JSON.stringify(body) };
       }
     },
-    LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
+    ContentService: {
+      MimeType: { JSON: 'json' },
+      createTextOutput: (text) => ({ setMimeType() { return this; }, getContent: () => text })
+    },
+    LockService: { getScriptLock: () => ({ tryLock: () => true, waitLock() {}, releaseLock() {} }) },
     PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => props[k] || null, setProperty: (k, v) => { props[k] = v; } }) },
     CacheService: { getScriptCache: () => ({ get: (k) => cache[k] || null, put: (k, v) => { cache[k] = v; } }) }
   };
@@ -114,7 +140,15 @@ function load({ now = new Date('2026-10-05T09:00:00Z'), adminPin = '1234' } = {}
   for (const f of ['Logic.js', 'Code.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src', f), 'utf8'), context, { filename: f });
   }
-  return { app: context, sheets, clock, setTime: (iso) => { clock.now = new RealDate(iso).getTime(); } };
+    // Calls the API the way the website does and unwraps the JSON response.
+  const call = (action, idToken, params = {}) => {
+    const out = context.doPost({ postData: { contents: JSON.stringify({ action, idToken, ...params }) } });
+    return JSON.parse(out.getContent());
+  };
+  return {
+    app: context, sheets, props, fetches, call,
+    setTime: (iso) => { clock.now = new RealDate(iso).getTime(); }
+  };
 }
 
 module.exports = { load };

@@ -18,19 +18,30 @@ test('statusForCheckIn', () => {
   assert.equal(L.statusForCheckIn(1000, null), 'Present');
 });
 
-test('findMember by id or unique name, case-insensitive', () => {
+test('findMemberByEmail is case-insensitive and exact', () => {
   const roster = [
-    { id: 'S001', name: 'Jane Doe' },
-    { id: 'S002', name: 'John  Smith' },
-    { id: 'S003', name: 'Sam Lee' },
-    { id: 'S004', name: 'sam lee' }
+    { id: 'S001', email: 'Jane@Example.com' },
+    { id: 'S002', email: '' }
   ];
-  assert.equal(L.findMember(roster, ' s001 ').id, 'S001');
-  assert.equal(L.findMember(roster, 'JANE DOE').id, 'S001');
-  assert.equal(L.findMember(roster, 'john smith').id, 'S002');
-  assert.equal(L.findMember(roster, 'Sam Lee'), null, 'ambiguous names do not match');
-  assert.equal(L.findMember(roster, 'Jane'), null, 'partial names do not match');
-  assert.equal(L.findMember(roster, ''), null);
+  assert.equal(L.findMemberByEmail(roster, ' jane@example.com ').id, 'S001');
+  assert.equal(L.findMemberByEmail(roster, 'jane@example'), null);
+  assert.equal(L.findMemberByEmail(roster, ''), null, 'blank email never matches blank roster cell');
+});
+
+test('truncateToCode matches the RFC 4226 example', () => {
+  const hex = '1f8698690e02ca16618550ef7f19da8e945b555a';
+  const bytes = hex.match(/../g).map((h) => parseInt(h, 16));
+  assert.equal(L.truncateToCode(bytes, 6), '872921');
+  const signed = bytes.map((x) => (x > 127 ? x - 256 : x));
+  assert.equal(L.truncateToCode(signed, 6), '872921');
+});
+
+test('timeStep, normalizeCode, parseEmailList', () => {
+  assert.equal(L.timeStep(59999, 30), 1);
+  assert.equal(L.timeStep(60000, 30), 2);
+  assert.equal(L.normalizeCode(' 123 456 '), '123456');
+  assert.deepEqual(L.parseEmailList('A@x.com, b@y.com;\nc@z.com'), ['a@x.com', 'b@y.com', 'c@z.com']);
+  assert.deepEqual(L.parseEmailList(''), []);
 });
 
 test('mergeCheckIn never overrides an existing mark except Absent', () => {

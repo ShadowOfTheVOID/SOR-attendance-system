@@ -2,10 +2,10 @@
   "name": "sor-attendance-system",
   "version": "1.0.0",
   "private": true,
-  "description": "Attendance web app that records check-ins in a Google Sheet (Google Apps Script).",
+  "description": "Attendance check-in with Google sign-in and a rotating in-room code, recorded in a Google Sheet.",
   "scripts": {
     "test": "node --test test/*.test.js",
     "push": "clasp push",
-    "deploy": "clasp push && clasp deploy"
+    "deploy:site": "firebase deploy --only hosting"
   }
 }
