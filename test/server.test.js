@@ -3,185 +3,245 @@ const assert = require('node:assert/strict');
 const { load } = require('./fakeSheets');
 
 const TOKENS = {
-  'tok-jane': { email: 'Jane@Example.com', emailVerified: true },
-  'tok-john': { email: 'john@example.com', emailVerified: true },
-  'tok-old': { email: 'old@example.com', emailVerified: true },
+  'tok-ana': { email: 'ana@example.com', emailVerified: true },
+  'tok-ben': { email: 'BEN@example.com', emailVerified: true },
+  'tok-cara': { email: 'cara@example.com', emailVerified: true },
+  'tok-ghost': { email: 'ghost@example.com', emailVerified: true },
   'tok-stranger': { email: 'stranger@example.com', emailVerified: true },
-  'tok-unverified': { email: 'jane@example.com', emailVerified: false },
+  'tok-unverified': { email: 'ana@example.com', emailVerified: false },
   'tok-owner': { email: 'owner@example.com', emailVerified: true }
 };
 
+const day = (y, m, d) => new Date(Date.UTC(y, m - 1, d));
+
+/**
+ * Builds a tab shaped like the team's "Offseason 2026": labels in column A,
+ * shifts from column I, students below "Avg Attendees" with a blank separator.
+ */
+function buildAttendanceTab(env) {
+  const sh = env.app.SpreadsheetApp.getActive().insertSheet('Offseason 2026');
+  const cols = [
+    // date, shift #, location, start, end
+    [day(2026, 10, 3), 1, 'Hangar 391', '3:45:00 PM --> 4:45', '7:15:00 PM -->8:15'],
+    [day(2026, 10, 4), 1, 'Hangar 391', '9:45 AM', '1:15 PM'],
+    [day(2026, 10, 4), 2, 'Hangar 391', '1:00 PM', '4:15 PM'],
+    [day(2026, 10, 4), 1, 'Online', '3:00 PM', '4:00 PM'],
+    [day(2026, 10, 6), 1, 'Hangar 391', '5:45 PM', '8:45 PM']
+  ];
+  const label = (r, text) => sh.set(r, 1, text);
+  label(1, 'x5');
+  label(2, 'Date');
+  label(3, 'Shift Number');
+  label(4, 'Location');
+  label(5, 'Mentor 1');
+  label(19, 'Start Time\nShould start 15 min. prior');
+  label(20, 'End Time\nShould start 15 min. before');
+  label(21, 'Notes / Meeting Objective(s)');
+  label(30, '=COUNTIFS(...)');
+  label(31, 'Avg Attendees');
+  cols.forEach(([d, n, loc, start, end], i) => {
+    const c = 9 + i;
+    sh.set(2, c, d); sh.set(3, c, n); sh.set(4, c, loc); sh.set(19, c, start); sh.set(20, c, end);
+    sh.set(30, c, true); sh.set(31, c, '=COUNTIF(...)');
+  });
+  const students = [[33, 'Ana Alvarez'], [34, 'Ben Brooks'], [36, 'Cara Chen']]; // row 35 blank separator
+  students.forEach(([r, name]) => {
+    sh.set(r, 1, name);
+    sh.set(r, 2, '=TRUNC(...)');
+    cols.forEach((_, i) => sh.set(r, 9 + i, 'Not Present'));
+  });
+  sh.set(34, 10, 'Partial'); // Ben already judged Partial for 10/4 shift 1
+  return sh;
+}
+
 function fresh(opts = {}) {
-  const env = load({ tokens: TOKENS, ...opts });
+  const env = load({ tokens: TOKENS, now: new Date('2026-10-04T13:10:00Z'), ...opts });
+  env.att = buildAttendanceTab(env);
   env.app.setup();
-  env.sheets.Roster.getRange(2, 1, 3, 5).setValues([
-    ['S001', 'Jane Doe', 'A', true, 'jane@example.com'],
-    ['S002', 'John Smith', 'B', true, 'JOHN@example.com'],
-    ['S003', 'Old Member', 'A', false, 'old@example.com']
-  ]);
+  const roster = env.sheets['Check-in Roster'];
+  const emails = { 'Ana Alvarez': 'ana@example.com', 'Ben Brooks': 'ben@example.com', 'Cara Chen': 'cara@example.com' };
+  for (let r = 2; r <= roster.getLastRow(); r++) roster.set(r, 2, emails[roster.get(r, 1)] || '');
+  roster.getRange(roster.getLastRow() + 1, 1, 1, 2).setValues([['Ghost Person', 'ghost@example.com']]);
   return env;
 }
 
 const ok = (res) => { assert.equal(res.ok, true, res.error); return res.data; };
-const fail = (res, re) => { assert.equal(res.ok, false); assert.match(res.error, re); };
-const displayCode = (env) => ok(env.call('displayCode', 'tok-owner')).code;
-const checkIn = (env, tok, code = displayCode(env)) => env.call('checkIn', tok, { code });
+const fail = (res, re) => { assert.equal(res.ok, false, 'expected failure'); assert.match(res.error, re); };
+const shifts = (env, date) => ok(env.call('shifts', 'tok-owner', date ? { date } : {}));
+const keyOf = (env, labelPart, date) => shifts(env, date).shifts.find((s) => s.label.includes(labelPart)).key;
+const codeFor = (env, key) => ok(env.call('displayCode', 'tok-owner', { shiftKey: key })).code;
+const COL = { oct3: 9, oct4s1: 10, oct4s2: 11, oct4online: 12, oct6: 13 };
+const ROW = { ana: 33, ben: 34, cara: 36 };
+const logRows = (env) => env.sheets['Check-in Log'].cells.slice(1).filter(Boolean);
 
-const header = (env) => env.sheets.Attendance.getRange(1, 1, 1, env.sheets.Attendance.getLastColumn()).getValues()[0];
-const rowOf = (env, id) => env.sheets.Attendance.cells.findIndex((r) => r && r[0] === id) + 1;
-const cell = (env, id, date) => env.sheets.Attendance.get(rowOf(env, id), header(env).indexOf(date) + 1);
-const logStatuses = (env) => env.sheets.Log.cells.slice(1).map((r) => r[4]);
-
-test('setup creates sheets, makes the owner admin, and creates a code secret', () => {
+test('setup adds only the three check-in tabs and lists students on the roster', () => {
   const env = fresh();
-  for (const n of ['Roster', 'Attendance', 'Log', 'Settings']) assert.ok(env.sheets[n], n);
-  assert.deepEqual(header(env), ['ID', 'Name', 'Group']);
+  assert.deepEqual(Object.keys(env.sheets).sort(),
+    ['Check-in Log', 'Check-in Roster', 'Check-in Settings', 'Offseason 2026']);
+  const names = env.sheets['Check-in Roster'].cells.slice(1).map((r) => r[0]);
+  assert.deepEqual(names, ['Ana Alvarez', 'Ben Brooks', 'Cara Chen', 'Ghost Person']);
   assert.ok(env.props.CODE_SECRET.length > 40);
   assert.equal(ok(env.call('me', 'tok-owner')).isAdmin, true);
+
+  env.app.fillRosterNames(); // re-running adds no duplicates
+  assert.equal(env.sheets['Check-in Roster'].getLastRow(), 5);
 });
 
-test('me identifies the roster member from their Google email', () => {
+test('shifts lists the day\'s columns and defaults to the one running now', () => {
+  const env = fresh(); // 13:10 on 10/4: shift 1 (9:45–1:15) and shift 2 (1:00–4:15) overlap
+  const s = shifts(env);
+  assert.equal(s.date, '2026-10-04');
+  assert.deepEqual(s.shifts.map((x) => x.label), [
+    'Sun 10/4 · Shift 1 · Hangar 391 · 9:45 AM–1:15 PM',
+    'Sun 10/4 · Shift 2 · Hangar 391 · 1:00 PM–4:15 PM',
+    'Sun 10/4 · Shift 1 · Online · 3:00 PM–4:00 PM'
+  ]);
+  assert.equal(s.defaultKey, s.shifts[1].key, 'latest-started running shift');
+  const oct3 = shifts(env, '2026-10-03').shifts;
+  assert.equal(oct3[0].label, 'Sat 10/3 · Shift 1 · Hangar 391 · 4:45 PM–8:15 PM', 'edited times use the new value');
+});
+
+test('check-in marks Present in the column of the shift on the display', () => {
   const env = fresh();
-  const me = ok(env.call('me', 'tok-jane'));
-  assert.equal(me.email, 'jane@example.com');
-  assert.equal(me.member.id, 'S001');
-  assert.equal(me.isAdmin, false);
-  assert.equal(ok(env.call('me', 'tok-stranger')).member, null);
+  const key = keyOf(env, 'Shift 2');
+  const r = ok(env.call('checkIn', 'tok-ana', { code: codeFor(env, key) }));
+  assert.equal(r.status, 'Present');
+  assert.match(r.shift, /Shift 2/);
+  assert.equal(env.att.get(ROW.ana, COL.oct4s2), 'Present');
+  assert.equal(env.att.get(ROW.ana, COL.oct4s1), 'Not Present', 'other shifts untouched');
+  assert.equal(env.att.get(ROW.ana, 2), '=TRUNC(...)', 'formula columns untouched');
+  assert.equal(env.att.get(35, COL.oct4s2), '', 'separator row untouched');
+  assert.equal(logRows(env).at(-1)[4], 'Present');
 });
 
-test('requests without a valid verified token are rejected', () => {
+test('two displays for different shifts give different codes, each marking its own column', () => {
+  const env = fresh({ now: new Date('2026-10-04T15:10:00Z') });
+  const hangar = keyOf(env, 'Shift 2');
+  const online = keyOf(env, 'Online');
+  const c1 = codeFor(env, hangar);
+  const c2 = codeFor(env, online);
+  assert.notEqual(c1, c2);
+  ok(env.call('checkIn', 'tok-ana', { code: c1 }));
+  ok(env.call('checkIn', 'tok-cara', { code: c2 }));
+  assert.equal(env.att.get(ROW.ana, COL.oct4s2), 'Present');
+  assert.equal(env.att.get(ROW.cara, COL.oct4online), 'Present');
+  assert.equal(env.att.get(ROW.cara, COL.oct4s2), 'Not Present');
+});
+
+test('check-in never overrides Partial/Unproductive, and repeats are no-ops', () => {
+  const env = fresh();
+  const key = keyOf(env, 'Shift 1 · Hangar');
+  const r = ok(env.call('checkIn', 'tok-ben', { code: codeFor(env, key) }));
+  assert.equal(r.alreadyMarked, true);
+  assert.equal(env.att.get(ROW.ben, COL.oct4s1), 'Partial');
+
+  ok(env.call('checkIn', 'tok-ana', { code: codeFor(env, key) }));
+  assert.equal(ok(env.call('checkIn', 'tok-ana', { code: codeFor(env, key) })).alreadyMarked, true);
+  assert.equal(logRows(env).filter((r) => r[4] === 'Present').length, 1);
+});
+
+test('codes rotate: the previous window is accepted, older codes are not', () => {
+  const env = fresh();
+  env.setTime('2026-10-04T13:10:05Z');
+  const key = keyOf(env, 'Shift 2');
+  const code = codeFor(env, key);
+  env.setTime('2026-10-04T13:10:35Z');
+  assert.notEqual(codeFor(env, key), code);
+  ok(env.call('checkIn', 'tok-ana', { code }));
+  env.setTime('2026-10-04T13:11:05Z');
+  fail(env.call('checkIn', 'tok-cara', { code }), /wrong or has expired/);
+  assert.equal(env.att.get(ROW.cara, COL.oct4s2), 'Not Present');
+  assert.equal(logRows(env).at(-1)[4], 'Rejected');
+});
+
+test('a code for another day\'s shift does not work today', () => {
+  const env = fresh();
+  const step = Math.floor(Date.parse('2026-10-04T13:10:00Z') / 30000);
+  const otherDayKey = shifts(env, '2026-10-06').shifts[0].key;
+  const forged = env.app.codeFor_(otherDayKey, step);
+  fail(env.call('checkIn', 'tok-ana', { code: forged }), /wrong/);
+});
+
+test('wrong codes are rate-limited per account', () => {
+  const env = fresh();
+  const key = keyOf(env, 'Shift 2');
+  for (let i = 0; i < 5; i++) fail(env.call('checkIn', 'tok-ana', { code: '000000' }), /wrong/);
+  fail(env.call('checkIn', 'tok-ana', { code: codeFor(env, key) }), /Too many/);
+  ok(env.call('checkIn', 'tok-cara', { code: codeFor(env, key) }));
+});
+
+test('check-in errors: not on roster, roster name missing from tab, no shift today, closed', () => {
+  const env = fresh();
+  const key = keyOf(env, 'Shift 2');
+  fail(env.call('checkIn', 'tok-stranger', { code: codeFor(env, key) }), /not on the Check-in Roster/);
+  fail(env.call('checkIn', 'tok-ghost', { code: codeFor(env, key) }), /not a row in the attendance tab/);
+
+  env.setTime('2026-10-05T18:00:00Z');
+  fail(env.call('checkIn', 'tok-ana', { code: '123456' }), /no shift today/);
+
+  const s = env.sheets['Check-in Settings'];
+  const row = s.cells.findIndex((r) => r && String(r[0]).startsWith('Self check-in')) + 1;
+  s.set(row, 2, 'FALSE');
+  fail(env.call('checkIn', 'tok-ana', { code: '123456' }), /closed/);
+});
+
+test('auth: tokens are required, verified, and cached', () => {
   const env = fresh();
   fail(env.call('me', undefined), /sign in/i);
   fail(env.call('me', 'forged'), /expired/i);
   fail(env.call('me', 'tok-unverified'), /verified/i);
-  fail(env.call('nope', 'tok-jane'), /Unknown action/);
+  fail(env.call('nope', 'tok-ana'), /Unknown action/);
+  const before = env.fetches.length;
+  ok(env.call('me', 'tok-ana'));
+  ok(env.call('me', 'tok-ana'));
+  assert.equal(env.fetches.length, before + 1);
+  assert.deepEqual(ok(env.call('me', 'tok-ana')).member, { name: 'Ana Alvarez' });
 });
 
-test('tokens are rejected when the Firebase API key is not configured', () => {
+test('missing Firebase API key is reported', () => {
   const env = fresh({ apiKey: null });
-  fail(env.call('me', 'tok-jane'), /Firebase API key/);
+  fail(env.call('me', 'tok-ana'), /Firebase API key/);
 });
 
-test('verified tokens are cached instead of re-checked every request', () => {
+test('admin-only actions reject students', () => {
   const env = fresh();
-  ok(env.call('me', 'tok-jane'));
-  ok(env.call('me', 'tok-jane'));
-  assert.equal(env.fetches.length, 1);
+  fail(env.call('shifts', 'tok-ana', {}), /Admins only/);
+  fail(env.call('displayCode', 'tok-ana', { shiftKey: 'x' }), /Admins only/);
+  fail(env.call('getShift', 'tok-ana', { date: '2026-10-04', shiftKey: 'x' }), /Admins only/);
+  fail(env.call('saveShift', 'tok-ana', { date: '2026-10-04', shiftKey: 'x', records: [] }), /Admins only/);
 });
 
-test('check-in with the current code marks Present, then Late after cutoff', () => {
+test('admin can read and edit any shift; changes are logged', () => {
   const env = fresh();
-  env.setTime('2026-10-05T09:00:00Z');
-  const r = ok(checkIn(env, 'tok-jane'));
-  assert.equal(r.status, 'Present');
-  assert.equal(cell(env, 'S001', '2026-10-05'), 'Present');
+  const key = keyOf(env, 'Hangar', '2026-10-06');
+  const before = ok(env.call('getShift', 'tok-owner', { date: '2026-10-06', shiftKey: key }));
+  assert.deepEqual(before.members.map((m) => [m.name, m.status]),
+    [['Ana Alvarez', 'Not Present'], ['Ben Brooks', 'Not Present'], ['Cara Chen', 'Not Present']]);
 
-  env.setTime('2026-10-05T09:30:00Z');
-  assert.equal(ok(checkIn(env, 'tok-john')).status, 'Late');
-  assert.equal(cell(env, 'S002', '2026-10-05'), 'Late');
-});
-
-test('codes rotate: previous window accepted, older codes rejected', () => {
-  const env = fresh();
-  env.setTime('2026-10-05T09:00:05Z');
-  const code = displayCode(env);
-  env.setTime('2026-10-05T09:00:35Z');
-  assert.notEqual(displayCode(env), code, 'code changed after 30s');
-  ok(checkIn(env, 'tok-jane', code)); // one window late is still fine
-
-  env.setTime('2026-10-05T09:01:05Z');
-  fail(checkIn(env, 'tok-john', code), /wrong or has expired/);
-  assert.equal(cell(env, 'S002', '2026-10-05'), '');
-  assert.ok(logStatuses(env).includes('Rejected'));
-});
-
-test('wrong codes are rejected and rate-limited per account', () => {
-  const env = fresh();
-  fail(checkIn(env, 'tok-jane', ''), /wrong/);
-  for (let i = 0; i < 4; i++) fail(checkIn(env, 'tok-jane', '000000'), /wrong/);
-  fail(checkIn(env, 'tok-jane'), /Too many/);
-  ok(checkIn(env, 'tok-john')); // other accounts unaffected
-});
-
-test('only active roster emails can check in', () => {
-  const env = fresh();
-  fail(checkIn(env, 'tok-stranger'), /not on the roster/);
-  fail(checkIn(env, 'tok-old'), /not on the roster/);
-});
-
-test('repeat check-in does not change the mark or log again', () => {
-  const env = fresh();
-  ok(checkIn(env, 'tok-jane'));
-  env.setTime('2026-10-05T11:00:00Z');
-  const r = ok(checkIn(env, 'tok-jane'));
-  assert.equal(r.alreadyMarked, true);
-  assert.equal(r.status, 'Present');
-  assert.deepEqual(logStatuses(env), ['Present']);
-});
-
-test('self check-in can be disabled in Settings', () => {
-  const env = fresh();
-  const s = env.sheets.Settings;
-  const row = s.cells.findIndex((r) => r && String(r[0]).startsWith('Self check-in')) + 1;
-  s.set(row, 2, 'FALSE');
-  fail(checkIn(env, 'tok-jane'), /closed/);
-});
-
-test('admin-only actions reject non-admins', () => {
-  const env = fresh();
-  fail(env.call('displayCode', 'tok-jane'), /Admins only/);
-  fail(env.call('getDay', 'tok-jane', { date: '2026-10-05' }), /Admins only/);
-  fail(env.call('saveDay', 'tok-jane', { date: '2026-10-05', records: [] }), /Admins only/);
-});
-
-test('admin save writes statuses, inserts dates in order, and logs changes', () => {
-  const env = fresh();
-  ok(checkIn(env, 'tok-jane')); // 2026-10-05
-  ok(env.call('saveDay', 'tok-owner', { date: '2026-10-07', records: [{ id: 'S001', status: 'Excused' }] }));
-  ok(env.call('saveDay', 'tok-owner', { date: '2026-10-06', records: [{ id: 'S002', status: 'Absent' }] }));
-  assert.deepEqual(header(env).slice(3), ['2026-10-05', '2026-10-06', '2026-10-07']);
-  assert.equal(cell(env, 'S001', '2026-10-05'), 'Present', 'existing column survived insert');
-  assert.equal(cell(env, 'S001', '2026-10-07'), 'Excused');
-  assert.equal(cell(env, 'S002', '2026-10-06'), 'Absent');
-
-  const day = ok(env.call('getDay', 'tok-owner', { date: '2026-10-05' }));
-  assert.deepEqual(day.members.map((m) => [m.id, m.status]), [['S001', 'Present'], ['S002', '']]);
-  assert.equal(day.summary.Unmarked, 1);
-
-  const r = ok(env.call('saveDay', 'tok-owner', { date: '2026-10-05', records: [{ id: 'S001', status: 'Present' }] }));
-  assert.equal(r.saved, 0, 'unchanged values are not logged');
+  const r = ok(env.call('saveShift', 'tok-owner', {
+    date: '2026-10-06', shiftKey: key,
+    records: [{ name: 'Ana Alvarez', status: 'Absent Excused' }, { name: 'Ben Brooks', status: 'Not Present' }]
+  }));
+  assert.equal(r.saved, 1, 'unchanged values are skipped');
+  assert.equal(env.att.get(ROW.ana, COL.oct6), 'Absent Excused');
+  assert.match(logRows(env).at(-1)[6], /owner@example.com \(was Not Present\)/);
 });
 
 test('admin input is validated', () => {
   const env = fresh();
-  fail(env.call('getDay', 'tok-owner', { date: '2026-13-01' }), /Invalid date/);
-  fail(env.call('saveDay', 'tok-owner', { date: '2026-10-05', records: [{ id: 'S001', status: 'Here' }] }), /Invalid status/);
+  const key = keyOf(env, 'Shift 2');
+  fail(env.call('getShift', 'tok-owner', { date: '2026-13-01', shiftKey: key }), /Invalid date/);
+  fail(env.call('saveShift', 'tok-owner', { date: '2026-10-04', shiftKey: key,
+    records: [{ name: 'Ana Alvarez', status: 'Late' }] }), /Invalid status/);
+  fail(env.call('getShift', 'tok-owner', { date: '2026-10-04', shiftKey: 'nope' }), /no longer exists/);
+  fail(env.call('displayCode', 'tok-owner', { shiftKey: keyOf(env, 'Hangar', '2026-10-06') }), /no longer exists/,
+    'display only works for today\'s shifts');
 });
 
-test('markAbsentToday fills only blank cells', () => {
+test('a wrong attendance tab name gives a clear error', () => {
   const env = fresh();
-  ok(checkIn(env, 'tok-jane'));
-  assert.equal(env.app.markAbsentToday(), 1);
-  assert.equal(cell(env, 'S001', '2026-10-05'), 'Present');
-  assert.equal(cell(env, 'S002', '2026-10-05'), 'Absent');
-  assert.equal(env.app.markAbsentToday(), 0);
-});
-
-test('a late check-in replaces an automatic Absent', () => {
-  const env = fresh();
-  env.app.markAbsentToday();
-  env.setTime('2026-10-05T10:00:00Z');
-  assert.equal(ok(checkIn(env, 'tok-john')).status, 'Late');
-  assert.equal(cell(env, 'S002', '2026-10-05'), 'Late');
-});
-
-test('many date columns grow the sheet past its initial width', () => {
-  const env = fresh();
-  for (let d = 1; d <= 30; d++) {
-    ok(env.call('saveDay', 'tok-owner', {
-      date: `2026-11-${String(d).padStart(2, '0')}`, records: [{ id: 'S001', status: 'Present' }]
-    }));
-  }
-  assert.equal(header(env).length, 33);
-  assert.equal(cell(env, 'S001', '2026-11-30'), 'Present');
+  const s = env.sheets['Check-in Settings'];
+  const row = s.cells.findIndex((r) => r && r[0] === 'Attendance tab') + 1;
+  s.set(row, 2, 'Build Season 2027');
+  fail(env.call('shifts', 'tok-owner', {}), /"Build Season 2027" not found/);
 });

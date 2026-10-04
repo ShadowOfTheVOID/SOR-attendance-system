@@ -1,6 +1,7 @@
 # SOR Attendance System
 
-Members check in on their phones and the result goes straight into a Google Sheet.
+Students check in on their phones and it's marked straight into the team's
+attendance spreadsheet.
 Two checks keep it honest:
 
 1. **Google sign-in.** Each member signs in with the Google account listed on
@@ -14,53 +15,81 @@ Two checks keep it honest:
  Phone ──Google sign-in──▶ Firebase Auth
    │  (ID token + code)
    ▼
- Firebase Hosting site ──POST──▶ Apps Script API ──▶ Google Sheet
- (check-in / display / admin)    (verifies token,       Roster · Attendance
-                                  checks code)          Log · Settings
+ Firebase Hosting site ──POST──▶ Apps Script API ──▶ SOR Signups/Attendance
+ (check-in / display / admin)    (verifies token,       student's cell in the
+                                  checks code)          shift's column
 ```
 
-## What's in the sheet
+## How it fits the team sheet
 
-| Sheet | Contents |
+It works directly on **"SOR Signups/Attendance '26-'27"**, in the tab named in
+settings (default **Offseason 2026**):
+
+- **Each column is a shift.** The script finds the header rows by their
+  column-A labels: `Date`, `Shift Number`, `Location`, `Start Time`, `End Time`.
+  Edited times like `3:45 PM --> 4:45` use the new time.
+- **Students are the rows below `Avg Attendees`.** The name is in column A.
+- **A check-in writes `Present`** into that student's cell for the shift. It
+  replaces `Not Present`, `Absent Excused` or `Absent Unexcused`, but never
+  `Partial` or `Unproductive`. Those stay the leads' call.
+- **Nothing else changes.** Formulas (Shift Score, counts), the row-30
+  checkboxes, mentor/parent rows and every other tab are left alone.
+
+It adds three small tabs of its own:
+
+| Tab | Contents |
 |---|---|
-| **Roster** | `ID · Name · Group · Active · Email`. You maintain this. **Email** must be the member's Google account. |
-| **Attendance** | One row per member and one column per date. Cells are `Present` / `Late` / `Absent` / `Excused`, color-coded. |
-| **Log** | Every check-in, admin edit, auto-absent mark and **rejected code attempt**, with the account email. |
-| **Settings** | Org name, late cutoff, check-in on/off, auto-absent hour, **admin emails**. |
+| **Check-in Roster** | Student name (exactly as in column A) and their Google email. Setup fills in the names; you add the emails. |
+| **Check-in Log** | Every check-in, **rejected code**, and admin edit, with time and email. |
+| **Check-in Settings** | Attendance tab name, check-in on/off, admin emails, org name. |
 
 ## The website
 
 | Page | Who | What |
 |---|---|---|
-| `/` | Members | Sign in with Google, then enter the code (or scan the QR, which fills it in automatically). |
-| `/display.html` | Admins | Put this on the projector or a tablet at the door. It shows the live code, a countdown bar and the QR code. |
-| `/admin.html` | Admins | Pick a date or group and fix statuses (Excused, Late, …). Each change is logged with the admin's email. |
+| `/` | Students | Sign in with Google, then scan the QR code or type the 6-digit code. |
+| `/display.html` | Admins | Pick the shift (it defaults to the one running now) and put it on a projector or tablet. It shows the live code, a countdown and the QR code. For **Online** shifts, screen-share it on Zoom. |
+| `/admin.html` | Admins | Pick a date and shift, then set any student's status from the sheet's own dropdown values. Each change is logged. |
+
+On days with overlapping shifts (e.g. 10/4 has Shift 1 and Shift 2 at the
+Hangar plus Online), run one display per shift, or switch the dropdown when the
+next shift starts. Each shift has its own codes, so the code tells the server
+which column to mark.
 
 ---
 
 ## Setup (about 20 minutes, one time)
 
-You need a Google account, and Node.js installed on your computer
-(<https://nodejs.org>, LTS version). Node is only used to upload the website.
+You need edit access to the attendance spreadsheet, and Node.js
+(<https://nodejs.org>, LTS version) on your computer for uploading the website.
 
-### Step 1: Google Sheet and script
+> **Do this from the team account (`sor.frc6059@gmail.com`) if you can.** The
+> script runs as whoever sets it up. If that's a personal account and it loses
+> access to the sheet later, check-in stops working.
 
-1. Create a new Google Sheet (for example "SOR Attendance").
-2. Open **Extensions → Apps Script**.
-3. Open `Code.gs`, delete what's there, and paste this repo's
-   `src/Code.js`.
-4. Click **+ → Script**, name it `Logic`, and paste `src/Logic.js`.
-5. Click **⚙ Project Settings**, tick **Show "appsscript.json" manifest file**,
+### Step 1: Add the script to the attendance spreadsheet
+
+1. Open **SOR Signups/Attendance '26-'27** and go to **Extensions → Apps Script**.
+2. Open `Code.gs`, delete what's there, and paste this repo's `src/Code.js`.
+3. Click **+ → Script**, name it `Logic`, and paste `src/Logic.js`.
+4. Click **⚙ Project Settings**, tick **Show "appsscript.json" manifest file**,
    go back to the editor, open `appsscript.json`, and paste `src/appsscript.json`.
-6. Save (Ctrl/Cmd+S). Go back to the sheet and **reload the page**. An
-   **Attendance** menu appears.
-7. Click **Attendance → Set up sheets**. Google asks for permission:
-   **Continue → choose your account → Advanced → Go to (project) (unsafe) → Allow**.
+5. Save (Ctrl/Cmd+S). Go back to the sheet and **reload the page**. A
+   **Check-in** menu appears.
+6. Click **Check-in → Set up check-in tabs**. Google asks for permission:
+   **Continue → choose the account → Advanced → Go to (project) (unsafe) → Allow**.
    It says "unsafe" only because this is your own unpublished script.
-8. Open the **Roster** sheet and replace the example rows with your members.
-   Fill in each person's **Google email**.
-9. Open the **Settings** sheet. **Admin emails** already contains your email.
-   Add other admins, separated by commas.
+   This creates the three tabs and copies every student name into
+   **Check-in Roster**.
+7. In **Check-in Roster**, fill column B with each student's Google email. You
+   can copy them from the *Student Email* column of
+   "2026-2027 SOR Student Information & Roster". Each one must be the account
+   they'll sign in with.
+8. In **Check-in Settings**:
+   - **Admin emails** already has the setup account. Add the leads/mentors who
+     run the display, comma-separated.
+   - **Attendance tab** is `Offseason 2026`. Change it when build season gets
+     its own tab.
 
 ### Step 2: Firebase project (for Google sign-in and hosting)
 
@@ -74,7 +103,7 @@ You need a Google account, and Node.js installed on your computer
 4. Firebase shows a `firebaseConfig = { … }` block. Open `public/config.js` in
    this repo and copy `apiKey`, `authDomain`, `projectId` and `appId` into the
    `firebase` section.
-5. Back in the Google Sheet: **Attendance → Set Firebase API key…**. Paste the
+5. Back in the Google Sheet: **Check-in → Set Firebase API key…**. Paste the
    same `apiKey` value. The script uses it to check that sign-ins really came
    from your Firebase project.
 
@@ -105,23 +134,25 @@ It prints your site address, for example `https://sor-attendance.web.app`.
 ### Step 5: Try it
 
 1. On a laptop or projector, open `https://<your-site>/display.html`, sign in
-   with an admin account, and click **Full screen**.
+   with an admin account, check the **Shift** dropdown, and click **Full screen**.
 2. On your phone, scan the QR code and sign in with a Google account that is on
-   the Roster. You should see ✓ *Present*, and the **Attendance** sheet fills in.
-3. Optional: run **Attendance → Install daily auto-absent trigger** so anyone
-   who didn't check in is marked `Absent` each night.
+   the Check-in Roster. You should see ✓ *Present for …*, and that student's
+   cell in the shift's column changes to `Present`.
 
 ---
 
 ## Day-to-day
 
-- **Start of class:** open the display page. With no display open, nobody can
-  check in.
-- **Close check-in:** set *Self check-in enabled* to `FALSE` in Settings.
-- **Late:** check-ins after *Late after (HH:mm)* count as `Late`. Leave it
-  blank to disable. Times use the sheet's time zone (**File → Settings**).
-- **New member:** add a row to Roster with their Google email. No redeploy needed.
-- **Someone can't check in:** an admin marks them on `/admin.html`.
+- **Start of a shift:** open the display page and pick the shift. With no
+  display open, nobody can check in.
+- **Close check-in:** set *Self check-in enabled* to `FALSE` in Check-in Settings.
+- **New student:** add their row to the attendance tab as usual, then run
+  **Check-in → Add student names to Check-in Roster** and fill in their email.
+- **New season tab:** change *Attendance tab* in Check-in Settings. The new tab
+  needs the same column-A labels (`Date`, `Shift Number`, `Location`,
+  `Start Time`, `End Time`, `Avg Attendees`).
+- **Partial / Unproductive / excused absences:** set them in the sheet as before,
+  or on `/admin.html`.
 
 ## Updating the code later
 
@@ -137,10 +168,13 @@ It prints your site address, for example `https://sor-attendance.web.app`.
 
 | Message | Fix |
 |---|---|
-| *Server not configured: run Attendance > Set Firebase API key…* | Do Step 2.5. |
+| *Server not configured: run Check-in > Set Firebase API key…* | Do Step 2.5. |
 | *Your sign-in expired* on every request | The key from Step 2.5 must be the same `apiKey` as in `config.js`. If you restricted that key in Google Cloud, do **not** use an "HTTP referrers" restriction, because the script calls it from Google's servers. |
 | *Server error* / *Failed to fetch* | Check `scriptUrl` ends in `/exec`, and that the deployment's access is **Anyone**. |
-| *… isn't on the roster* | The Email cell must match the Google account exactly, and **Active** must be ticked. |
+| *… is not on the Check-in Roster* | Add the email in column B of Check-in Roster. It must be the Google account they signed in with. |
+| *… is not a row in the attendance tab* | The name on Check-in Roster must match column A of the attendance tab (case and extra spaces don't matter). |
+| *There is no shift today* / wrong shifts listed | Check the `Date` row for today's column, and that *Attendance tab* in Check-in Settings is right. |
+| *Could not find a "… " row in column A* | The attendance tab is missing one of the labels listed under Day-to-day. |
 | *auth/unauthorized-domain* | If you use a custom domain, add it under Firebase **Authentication → Settings → Authorized domains**. |
 | *Too many wrong codes* | 5 wrong codes lock that account for 10 minutes. The Log sheet shows each attempt. |
 
@@ -161,5 +195,5 @@ It prints your site address, for example `https://sor-attendance.web.app`.
 ## Development
 
 ```bash
-npm test   # logic + API tests against an in-memory fake of Sheets, token check and HMAC
+npm test   # logic + API tests against a fake copy of the attendance tab layout
 ```

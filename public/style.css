@@ -48,3 +48,6 @@ body.display .card { background:#fff; color:var(--text); max-width:420px; width:
 #qr { background:#fff; padding:12px; border-radius:12px; margin-top:24px; line-height:0; }
 #qr img { width: min(260px, 60vw); height:auto; image-rendering: pixelated; }
 .display .hint { color:#cbd5e1; font-size:1.25rem; margin-top:16px; }
+.shiftpick { color:#cbd5e1; }
+.shiftpick select { width:auto; max-width:90vw; padding:6px 8px; font-size:.95rem; }
+body.display h1 { font-size: clamp(1.1rem, 3vw, 2rem); }

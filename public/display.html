@@ -11,6 +11,7 @@
 <main>
   <section class="card" id="auth"></section>
   <div class="signed-in hidden">
+    <p class="shiftpick"><label for="shift">Shift</label> <select id="shift"></select></p>
     <h1 id="title">Check in</h1>
     <p class="hint">Scan the QR code, or go to <b id="site"></b> and enter:</p>
     <div class="bigcode" id="code">······</div>
@@ -23,7 +24,7 @@
 
 <script src="config.js"></script>
 <script type="module">
-  import { $, api, requireSignIn } from './app.js';
+  import { $, api, esc, requireSignIn } from './app.js';
 
   const base = location.origin + location.pathname.replace(/display\.html$/, '');
   $('site').textContent = location.host;
@@ -38,9 +39,10 @@
 
   async function refresh() {
     clearTimeout(timer);
+    if (!$('shift').value) return;
     try {
-      const d = await api('displayCode');
-      $('title').textContent = d.orgName + ': check in';
+      const d = await api('displayCode', { shiftKey: $('shift').value });
+      $('title').textContent = d.shift;
       $('code').textContent = d.code.replace(/(\d{3})(\d{3})/, '$1 $2');
       showQr(d.code);
       $('err').textContent = '';
@@ -59,8 +61,23 @@
     requestAnimationFrame(tick);
   })();
 
+  $('shift').addEventListener('change', refresh);
   $('fs').onclick = () => document.documentElement.requestFullscreen?.();
-  requireSignIn(refresh);
+
+  requireSignIn(async () => {
+    try {
+      const s = await api('shifts');
+      if (!s.shifts.length) {
+        $('err').textContent = `No shifts today in "${s.tab}".`;
+        return;
+      }
+      $('shift').innerHTML = s.shifts.map((x) =>
+        `<option value="${esc(x.key)}"${x.key === s.defaultKey ? ' selected' : ''}>${esc(x.label)}</option>`).join('');
+      refresh();
+    } catch (e) {
+      $('err').textContent = e.message;
+    }
+  });
 </script>
 </body>
 </html>

@@ -1,39 +1,46 @@
 /**
- * SOR Attendance System — API (Google Apps Script, bound to a Sheet).
+ * SOR Attendance — check-in API (Google Apps Script bound to the team's
+ * "SOR Signups/Attendance" spreadsheet).
  *
  * The web pages live on Firebase Hosting and call doPost() with a Firebase
- * ID token from Google sign-in. Check-ins also need the rotating code shown
- * on the in-room display, so nobody can check in from home.
+ * ID token from Google sign-in. A check-in needs the rotating code shown on
+ * the in-room display; the display is tied to one shift (one column of the
+ * attendance tab), and a valid code marks the student "Present" there.
  *
- * Sheets:
- *   Roster      ID | Name | Group | Active | Email (you maintain this)
- *   Attendance  ID | Name | Group | <yyyy-MM-dd>… (one column per day)
- *   Log         every check-in / admin change, append-only
- *   Settings    key/value configuration
+ * Existing tabs are only read, except for single student cells in the
+ * attendance tab. This script adds three tabs of its own:
+ *   Check-in Settings   key/value configuration
+ *   Check-in Roster     Name (as in column A) | Google email
+ *   Check-in Log        every check-in, rejected code and admin edit
  */
 
-var SHEET = {
-  ROSTER: 'Roster',
-  ATTENDANCE: 'Attendance',
-  LOG: 'Log',
-  SETTINGS: 'Settings'
+var TAB = {
+  SETTINGS: 'Check-in Settings',
+  ROSTER: 'Check-in Roster',
+  LOG: 'Check-in Log'
 };
-var ROSTER_HEADERS = ['ID', 'Name', 'Group', 'Active', 'Email'];
-var ATTENDANCE_HEADERS = ['ID', 'Name', 'Group'];
-var LOG_HEADERS = ['Timestamp', 'Date', 'ID', 'Name', 'Status', 'Source', 'Note'];
-var FIRST_DATE_COL = ATTENDANCE_HEADERS.length + 1; // 1-based
+var ROSTER_HEADERS = ['Name (exactly as in the attendance tab)', 'Google email'];
+var LOG_HEADERS = ['Timestamp', 'Shift date', 'Shift', 'Name', 'Status', 'Source', 'Note'];
+var SETTING = {
+  TAB: 'Attendance tab',
+  OPEN: 'Self check-in enabled (TRUE/FALSE)',
+  ADMINS: 'Admin emails (comma-separated)',
+  ORG: 'Organization name'
+};
 var DEFAULT_SETTINGS = [
-  ['Organization name', 'SOR'],
-  ['Late after (HH:mm, blank = never late)', '09:15'],
-  ['Self check-in enabled (TRUE/FALSE)', true],
-  ['Auto-mark absent time (hour 0-23)', 23],
-  ['Admin emails (comma-separated)', '']
+  [SETTING.TAB, 'Offseason 2026'],
+  [SETTING.OPEN, 'TRUE'],
+  [SETTING.ADMINS, ''],
+  [SETTING.ORG, 'SOR']
 ];
-var STATUS_COLORS = {
-  Present: '#d9ead3',
-  Late: '#fff2cc',
-  Absent: '#f4cccc',
-  Excused: '#cfe2f3'
+// Column-A labels in the attendance tab (matched case-insensitively by prefix).
+var LABEL = {
+  DATE: 'Date',
+  SHIFT: 'Shift Number',
+  LOCATION: 'Location',
+  START: 'Start Time',
+  END: 'End Time',
+  STUDENTS_AFTER: 'Avg Attendees'
 };
 var CODE_STEP_SECONDS = 30; // a code is accepted for its window plus the previous one
 var CODE_DIGITS = 6;
@@ -44,49 +51,47 @@ var TOKEN_CACHE_SECONDS = 300;
 
 function onOpen() {
   SpreadsheetApp.getUi()
-    .createMenu('Attendance')
-    .addItem('Set up sheets', 'setup')
+    .createMenu('Check-in')
+    .addItem('Set up check-in tabs', 'setup')
+    .addItem('Add student names to Check-in Roster', 'fillRosterNames')
     .addItem('Set Firebase API key…', 'promptFirebaseApiKey')
-    .addSeparator()
-    .addItem('Mark unmarked as Absent (today)', 'markAbsentToday')
-    .addItem('Install daily auto-absent trigger', 'installDailyTrigger')
     .addToUi();
 }
 
 function setup() {
   var ss = SpreadsheetApp.getActive();
 
-  var roster = getOrCreateSheet_(ss, SHEET.ROSTER, ROSTER_HEADERS);
-  if (roster.getLastRow() < 2) {
-    roster.getRange(2, 1, 2, 5).setValues([
-      ['S001', 'Example Member', 'Group A', true, 'member1@gmail.com'],
-      ['S002', 'Another Member', 'Group B', true, 'member2@gmail.com']
-    ]);
-  }
-  roster.getRange('D2:D').insertCheckboxes();
-
-  var att = getOrCreateSheet_(ss, SHEET.ATTENDANCE, ATTENDANCE_HEADERS);
-  applyStatusFormatting_(att);
-
-  getOrCreateSheet_(ss, SHEET.LOG, LOG_HEADERS);
-
-  var settings = getOrCreateSheet_(ss, SHEET.SETTINGS, ['Setting', 'Value']);
-  settings.getRange('B:B').setNumberFormat('@'); // keep "09:15" as text
+  var settings = getOrCreateSheet_(ss, TAB.SETTINGS, ['Setting', 'Value']);
+  settings.getRange('B:B').setNumberFormat('@');
   var existing = settings.getRange(1, 1, settings.getLastRow(), 1).getValues()
     .map(function (r) { return r[0]; });
   DEFAULT_SETTINGS.forEach(function (row) {
     if (existing.indexOf(row[0]) !== -1) return;
-    var value = row[1];
-    if (row[0].indexOf('Admin emails') === 0) value = Session.getEffectiveUser().getEmail();
+    var value = row[0] === SETTING.ADMINS ? Session.getEffectiveUser().getEmail() : row[1];
     settings.appendRow([row[0], String(value)]);
   });
-  getCodeSecret_();
 
-  syncAttendanceRows_(att, getActiveRoster_());
-  SpreadsheetApp.getUi().alert(
-    'Setup complete.\n\n1. Fill in the Roster sheet (including each Google email).\n' +
-    '2. Attendance > Set Firebase API key…\n' +
-    '3. Deploy > New deployment > Web app, then put its URL in the site config.');
+  getOrCreateSheet_(ss, TAB.ROSTER, ROSTER_HEADERS);
+  getOrCreateSheet_(ss, TAB.LOG, LOG_HEADERS);
+  getCodeSecret_();
+  fillRosterNames();
+}
+
+/** Appends every student in the attendance tab that is not yet on the Check-in Roster. */
+function fillRosterNames() {
+  var ss = SpreadsheetApp.getActive();
+  var roster = getOrCreateSheet_(ss, TAB.ROSTER, ROSTER_HEADERS);
+  var known = getRoster_().map(function (m) { return m.name; });
+  var added = readLayout_(getAttendanceSheet_()).students
+    .filter(function (s) {
+      return !known.some(function (k) { return AttendanceLogic.sameName(k, s.name); });
+    })
+    .map(function (s) { return [s.name, '']; });
+  if (added.length) {
+    roster.getRange(roster.getLastRow() + 1, 1, added.length, 2).setValues(added);
+  }
+  SpreadsheetApp.getUi().alert(added.length + ' name(s) added to "' + TAB.ROSTER +
+    '". Fill in each student\'s Google email in column B.');
 }
 
 function promptFirebaseApiKey() {
@@ -101,25 +106,15 @@ function promptFirebaseApiKey() {
   ui.alert('Firebase API key saved.');
 }
 
-function installDailyTrigger() {
-  ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'markAbsentToday') ScriptApp.deleteTrigger(t);
-  });
-  var hour = Number(getSettings_().autoAbsentHour);
-  ScriptApp.newTrigger('markAbsentToday')
-    .timeBased().everyDays(1).atHour(isNaN(hour) ? 23 : hour).create();
-  SpreadsheetApp.getUi().alert('Daily trigger installed (runs around ' +
-    (isNaN(hour) ? 23 : hour) + ':00).');
-}
-
 // ---------------------------------------------------------------- API
 
 var ACTIONS = {
   me: apiMe_,
   checkIn: apiCheckIn_,
+  shifts: apiShifts_,
   displayCode: apiDisplayCode_,
-  getDay: apiGetDay_,
-  saveDay: apiSaveDay_
+  getShift: apiGetShift_,
+  saveShift: apiSaveShift_
 };
 
 function doGet() {
@@ -140,172 +135,239 @@ function doPost(e) {
 
 function apiMe_(user) {
   var settings = getSettings_();
-  var member = AttendanceLogic.findMemberByEmail(getActiveRoster_(), user.email);
+  var member = AttendanceLogic.findMemberByEmail(getRoster_(), user.email);
   return {
     orgName: settings.orgName,
     today: todayKey_(),
     email: user.email,
-    member: member,
+    member: member && { name: member.name },
     isAdmin: isAdmin_(user, settings),
     selfCheckIn: settings.selfCheckIn,
     statuses: AttendanceLogic.STATUSES
   };
 }
 
-/** The signed-in member checks in with the code currently on the display. */
+/** The signed-in student checks in with the code currently on a display. */
 function apiCheckIn_(user, req) {
   var settings = getSettings_();
   if (!settings.selfCheckIn) throw new Error('Check-in is currently closed.');
 
-  var member = AttendanceLogic.findMemberByEmail(getActiveRoster_(), user.email);
+  var member = AttendanceLogic.findMemberByEmail(getRoster_(), user.email);
   if (!member) {
-    throw new Error(user.email + ' is not on the roster. Ask an admin to add this email.');
+    throw new Error(user.email + ' is not on the Check-in Roster. Ask an admin to add it.');
   }
 
   var now = new Date();
-  var tz = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
-  var dateKey = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
-
   var cache = CacheService.getScriptCache();
   var failKey = 'codefail_' + user.email;
   var failures = Number(cache.get(failKey) || 0);
   if (failures >= MAX_CODE_FAILURES) {
     throw new Error('Too many wrong codes. Wait 10 minutes and try again.');
   }
+
+  var sheet = getAttendanceSheet_();
+  var layout = readLayout_(sheet);
+  var today = todayKey_();
+  var shifts = readShifts_(sheet, layout, today);
+  if (!shifts.length) throw new Error('There is no shift today in "' + sheet.getName() + '".');
+
   var code = AttendanceLogic.normalizeCode(req.code);
-  if (!isCurrentCode_(code, now.getTime())) {
+  var shift = findShiftForCode_(shifts, code, now.getTime());
+  if (!shift) {
     cache.put(failKey, String(failures + 1), 600);
-    appendLog_([[now, dateKey, member.id, member.name, 'Rejected', 'Self check-in',
-      'wrong or expired code "' + code + '"']]);
+    appendLog_([[now, today, '', member.name, 'Rejected', 'Self check-in',
+      user.email + ': wrong or expired code "' + code + '"']]);
     throw new Error('That code is wrong or has expired. Enter the code on the screen right now.');
   }
 
-  var minutes = AttendanceLogic.parseTime(Utilities.formatDate(now, tz, 'HH:mm'));
-  var incoming = AttendanceLogic.statusForCheckIn(minutes, settings.lateCutoff);
-
+  var student = findStudent_(layout, member.name);
   return withLock_(function () {
-    var att = SpreadsheetApp.getActive().getSheetByName(SHEET.ATTENDANCE);
-    var rowById = syncAttendanceRows_(att, [member]);
-    var col = getOrCreateDateColumn_(att, dateKey);
-    var cell = att.getRange(rowById[member.id], col);
-    var result = AttendanceLogic.mergeCheckIn(String(cell.getValue()), incoming);
+    var cell = sheet.getRange(student.row, shift.col);
+    var result = AttendanceLogic.mergeCheckIn(cell.getValue());
     if (result.changed) {
       cell.setValue(result.status);
-      appendLog_([[now, dateKey, member.id, member.name, result.status, 'Self check-in',
+      appendLog_([[now, shift.date, shift.label, student.name, result.status, 'Self check-in',
         user.email]]);
     }
     return {
-      name: member.name,
+      name: student.name,
       status: result.status,
       alreadyMarked: !result.changed,
-      time: Utilities.formatDate(now, tz, 'HH:mm')
+      shift: shift.label
     };
   });
 }
 
-/** Admin: the code to show on the in-room display. */
-function apiDisplayCode_(user) {
+/** Admin: shifts on a date (default today) and which one is running now. */
+function apiShifts_(user, req) {
   requireAdmin_(user);
+  var date = req.date || todayKey_();
+  assertDateKey_(date);
+  var sheet = getAttendanceSheet_();
+  var shifts = readShifts_(sheet, readLayout_(sheet), date);
+  var idx = date === todayKey_() ? AttendanceLogic.pickDefaultShift(shifts, nowMinutes_()) : 0;
+  return {
+    date: date,
+    tab: sheet.getName(),
+    shifts: shifts.map(function (s) { return { key: s.key, label: s.label }; }),
+    defaultKey: shifts.length ? shifts[Math.max(idx, 0)].key : null
+  };
+}
+
+/** Admin: the code to show on the display for one of today's shifts. */
+function apiDisplayCode_(user, req) {
+  requireAdmin_(user);
+  var sheet = getAttendanceSheet_();
+  var shift = findShiftByKey_(readShifts_(sheet, readLayout_(sheet), todayKey_()), req.shiftKey);
   var nowMs = new Date().getTime();
   var step = AttendanceLogic.timeStep(nowMs, CODE_STEP_SECONDS);
   return {
-    code: codeForStep_(step),
+    code: codeFor_(shift.key, step),
     expiresInMs: (step + 1) * CODE_STEP_SECONDS * 1000 - nowMs,
     stepSeconds: CODE_STEP_SECONDS,
+    shift: shift.label,
     orgName: getSettings_().orgName
   };
 }
 
-/** Admin: roster with statuses for a date. */
-function apiGetDay_(user, req) {
+/** Admin: every student's status for one shift. */
+function apiGetShift_(user, req) {
   requireAdmin_(user);
-  var dateKey = req.date;
-  assertDateKey_(dateKey);
-  var att = SpreadsheetApp.getActive().getSheetByName(SHEET.ATTENDANCE);
-  var roster = getActiveRoster_();
-  var rowById = syncAttendanceRows_(att, roster);
-  var col = findDateColumn_(att, dateKey);
-  var values = col > 0 && att.getLastRow() > 1
-    ? att.getRange(1, col, att.getLastRow(), 1).getValues()
-    : [];
-  var members = roster.map(function (m) {
-    var v = values.length ? values[rowById[m.id] - 1][0] : '';
-    return { id: m.id, name: m.name, group: m.group, status: String(v || '') };
+  assertDateKey_(req.date);
+  var sheet = getAttendanceSheet_();
+  var layout = readLayout_(sheet);
+  var shift = findShiftByKey_(readShifts_(sheet, layout, req.date), req.shiftKey);
+  var values = readColumn_(sheet, layout, shift.col);
+  var members = layout.students.map(function (s) {
+    return { name: s.name, status: String(values[s.row - 1] || '') };
   });
   return {
-    date: dateKey,
+    date: req.date,
+    shift: { key: shift.key, label: shift.label },
     members: members,
     summary: AttendanceLogic.summarize(members.map(function (m) { return m.status; }))
   };
 }
 
-/** Admin: save statuses for a date. req.records = [{id, status}] */
-function apiSaveDay_(user, req) {
+/** Admin: save statuses for one shift. req.records = [{name, status}] */
+function apiSaveShift_(user, req) {
   requireAdmin_(user);
-  var dateKey = req.date;
+  assertDateKey_(req.date);
   var records = req.records || [];
-  assertDateKey_(dateKey);
   records.forEach(function (r) {
     if (!AttendanceLogic.isValidStatus(r.status)) throw new Error('Invalid status: ' + r.status);
   });
+  var sheet = getAttendanceSheet_();
+  var layout = readLayout_(sheet);
+  var shift = findShiftByKey_(readShifts_(sheet, layout, req.date), req.shiftKey);
 
   return withLock_(function () {
-    var att = SpreadsheetApp.getActive().getSheetByName(SHEET.ATTENDANCE);
-    var roster = getActiveRoster_();
-    var byId = {};
-    roster.forEach(function (m) { byId[m.id] = m; });
-    var rowById = syncAttendanceRows_(att, roster);
-    var col = getOrCreateDateColumn_(att, dateKey);
-    var range = att.getRange(1, col, att.getLastRow(), 1);
-    var values = range.getValues();
+    var values = readColumn_(sheet, layout, shift.col);
     var now = new Date();
     var logRows = [];
-
     records.forEach(function (r) {
-      var row = rowById[r.id];
-      if (!row || !byId[r.id]) return;
-      var before = String(values[row - 1][0] || '');
+      var student = findStudent_(layout, r.name);
+      var before = String(values[student.row - 1] || '');
       if (before === r.status) return;
-      values[row - 1][0] = r.status;
-      logRows.push([now, dateKey, r.id, byId[r.id].name, r.status || '(cleared)',
-        'Admin ' + user.email, before ? 'was ' + before : '']);
+      // Write single cells so formulas and blank separator rows are never touched.
+      sheet.getRange(student.row, shift.col).setValue(r.status);
+      logRows.push([now, shift.date, shift.label, student.name, r.status, 'Admin',
+        user.email + (before ? ' (was ' + before + ')' : '')]);
     });
-
-    range.setValues(values);
     appendLog_(logRows);
     return { saved: logRows.length };
   });
 }
 
-/** Fills every blank cell for today with Absent. Used by the menu and daily trigger. */
-function markAbsentToday() {
-  var dateKey = todayKey_();
-  var count = withLock_(function () {
-    var att = SpreadsheetApp.getActive().getSheetByName(SHEET.ATTENDANCE);
-    var roster = getActiveRoster_();
-    var rowById = syncAttendanceRows_(att, roster);
-    var col = getOrCreateDateColumn_(att, dateKey);
-    var range = att.getRange(1, col, att.getLastRow(), 1);
-    var values = range.getValues();
-    var now = new Date();
-    var logRows = [];
-    roster.forEach(function (m) {
-      var row = rowById[m.id];
-      if (!values[row - 1][0]) {
-        values[row - 1][0] = 'Absent';
-        logRows.push([now, dateKey, m.id, m.name, 'Absent', 'Auto', '']);
-      }
-    });
-    range.setValues(values);
-    appendLog_(logRows);
-    return logRows.length;
-  });
-  try {
-    SpreadsheetApp.getActive().toast(count + ' member(s) marked Absent for ' + dateKey);
-  } catch (e) {
-    // No UI when run from a trigger.
+// ---------------------------------------------------------------- Attendance tab
+
+function getAttendanceSheet_() {
+  var name = getSettings_().attendanceTab;
+  var sheet = SpreadsheetApp.getActive().getSheetByName(name);
+  if (!sheet) {
+    throw new Error('Attendance tab "' + name + '" not found. Fix it in "' + TAB.SETTINGS + '".');
   }
-  return count;
+  return sheet;
+}
+
+/** Finds the header rows by their column-A labels, and the student rows below them. */
+function readLayout_(sheet) {
+  var lastRow = sheet.getLastRow();
+  var colA = sheet.getRange(1, 1, lastRow, 1).getValues().map(function (r) { return r[0]; });
+  var row = function (label) {
+    var i = AttendanceLogic.findLabelRow(colA, label);
+    if (i === -1) {
+      throw new Error('Could not find a "' + label + '" row in column A of "' + sheet.getName() + '".');
+    }
+    return i + 1;
+  };
+  var layout = {
+    dateRow: row(LABEL.DATE),
+    shiftRow: row(LABEL.SHIFT),
+    locationRow: row(LABEL.LOCATION),
+    startRow: row(LABEL.START),
+    endRow: row(LABEL.END),
+    students: []
+  };
+  for (var r = row(LABEL.STUDENTS_AFTER) + 1; r <= lastRow; r++) {
+    var name = String(colA[r - 1] == null ? '' : colA[r - 1]).trim();
+    if (name) layout.students.push({ name: name, row: r });
+  }
+  layout.lastRow = lastRow;
+  return layout;
+}
+
+/** Shift columns whose date is dateKey, left to right. */
+function readShifts_(sheet, layout, dateKey) {
+  var lastCol = sheet.getLastColumn();
+  var height = Math.max(layout.dateRow, layout.shiftRow, layout.locationRow,
+    layout.startRow, layout.endRow);
+  var range = sheet.getRange(1, 1, height, lastCol);
+  var values = range.getValues();
+  var shown = range.getDisplayValues();
+  var tz = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
+  var shifts = [];
+  var seen = {};
+  for (var c = 2; c <= lastCol; c++) {
+    var d = values[layout.dateRow - 1][c - 1];
+    if (!isDate_(d) || Utilities.formatDate(d, tz, 'yyyy-MM-dd') !== dateKey) continue;
+    var cell = function (r) { return String(shown[r - 1][c - 1]).trim(); };
+    var s = {
+      col: c,
+      date: dateKey,
+      shiftNumber: cell(layout.shiftRow),
+      location: cell(layout.locationRow),
+      start: AttendanceLogic.parseTimeLoose(cell(layout.startRow)),
+      end: AttendanceLogic.parseTimeLoose(cell(layout.endRow))
+    };
+    s.label = AttendanceLogic.shiftLabel(s);
+    // Keyed by header contents, not column letter, so inserting a column
+    // elsewhere doesn't invalidate the code on the display.
+    s.key = [dateKey, s.shiftNumber, s.location, cell(layout.startRow)].join('|');
+    if (seen[s.key]) s.key += '|' + c;
+    seen[s.key] = true;
+    shifts.push(s);
+  }
+  return shifts;
+}
+
+function findShiftByKey_(shifts, key) {
+  for (var i = 0; i < shifts.length; i++) {
+    if (shifts[i].key === key) return shifts[i];
+  }
+  throw new Error('That shift no longer exists. Reload and pick it again.');
+}
+
+function findStudent_(layout, name) {
+  for (var i = 0; i < layout.students.length; i++) {
+    if (AttendanceLogic.sameName(layout.students[i].name, name)) return layout.students[i];
+  }
+  throw new Error('"' + name + '" is not a row in the attendance tab. Check the spelling on ' +
+    'the Check-in Roster.');
+}
+
+function readColumn_(sheet, layout, col) {
+  return sheet.getRange(1, col, layout.lastRow, 1).getValues().map(function (r) { return r[0]; });
 }
 
 // ---------------------------------------------------------------- Helpers
@@ -319,127 +381,43 @@ function getOrCreateSheet_(ss, name, headers) {
   return sheet;
 }
 
-function applyStatusFormatting_(sheet) {
-  var range = sheet.getRange(2, FIRST_DATE_COL, sheet.getMaxRows() - 1,
-    Math.max(1, sheet.getMaxColumns() - FIRST_DATE_COL + 1));
-  var rules = Object.keys(STATUS_COLORS).map(function (status) {
-    return SpreadsheetApp.newConditionalFormatRule()
-      .whenTextEqualTo(status)
-      .setBackground(STATUS_COLORS[status])
-      .setRanges([range])
-      .build();
-  });
-  sheet.setConditionalFormatRules(rules);
-  sheet.setFrozenColumns(ATTENDANCE_HEADERS.length);
-}
-
 function getSettings_() {
-  var sheet = SpreadsheetApp.getActive().getSheetByName(SHEET.SETTINGS);
+  var sheet = SpreadsheetApp.getActive().getSheetByName(TAB.SETTINGS);
   var map = {};
   if (sheet && sheet.getLastRow() > 1) {
     sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues().forEach(function (r) {
       map[r[0]] = r[1];
     });
   }
-  var get = function (i) {
-    var key = DEFAULT_SETTINGS[i][0];
-    return map.hasOwnProperty(key) ? map[key] : DEFAULT_SETTINGS[i][1];
-  };
-  var lateRaw = get(1);
-  if (lateRaw instanceof Date) lateRaw = Utilities.formatDate(lateRaw,
-    SpreadsheetApp.getActive().getSpreadsheetTimeZone(), 'HH:mm');
-  return {
-    orgName: String(get(0) || 'SOR'),
-    lateCutoff: AttendanceLogic.parseTime(lateRaw),
-    selfCheckIn: String(get(2)).toUpperCase() !== 'FALSE',
-    autoAbsentHour: get(3),
-    adminEmails: AttendanceLogic.parseEmailList(get(4))
-  };
-}
-
-function getActiveRoster_() {
-  var sheet = SpreadsheetApp.getActive().getSheetByName(SHEET.ROSTER);
-  if (!sheet) throw new Error('Roster sheet missing. Run Attendance > Set up sheets.');
-  if (sheet.getLastRow() < 2) return [];
-  var seen = {};
-  return sheet.getRange(2, 1, sheet.getLastRow() - 1, ROSTER_HEADERS.length).getValues()
-    .filter(function (r) {
-      var id = String(r[0]).trim();
-      var active = r[3] === true || String(r[3]).toUpperCase() === 'TRUE';
-      if (!id || !active || seen[id]) return false;
-      seen[id] = true;
-      return true;
-    })
-    .map(function (r) {
-      return {
-        id: String(r[0]).trim(),
-        name: String(r[1]).trim(),
-        group: String(r[2]).trim(),
-        email: String(r[4]).trim().toLowerCase()
-      };
-    });
-}
-
-/** Ensures each member has a row in Attendance; returns {id: rowNumber} for all rows. */
-function syncAttendanceRows_(att, members) {
-  var lastRow = att.getLastRow();
-  var rowById = {};
-  if (lastRow > 1) {
-    att.getRange(2, 1, lastRow - 1, 1).getValues().forEach(function (r, i) {
-      var id = String(r[0]).trim();
-      if (id) rowById[id] = i + 2;
-    });
-  }
-  var newRows = [];
-  members.forEach(function (m) {
-    if (!rowById[m.id]) {
-      newRows.push([m.id, m.name, m.group]);
-      rowById[m.id] = lastRow + newRows.length;
+  var get = function (key) {
+    if (map.hasOwnProperty(key)) return map[key];
+    for (var i = 0; i < DEFAULT_SETTINGS.length; i++) {
+      if (DEFAULT_SETTINGS[i][0] === key) return DEFAULT_SETTINGS[i][1];
     }
-  });
-  if (newRows.length) {
-    att.getRange(lastRow + 1, 1, newRows.length, 3).setValues(newRows);
-  }
-  return rowById;
+    return '';
+  };
+  return {
+    attendanceTab: String(get(SETTING.TAB)).trim(),
+    selfCheckIn: String(get(SETTING.OPEN)).toUpperCase() !== 'FALSE',
+    adminEmails: AttendanceLogic.parseEmailList(get(SETTING.ADMINS)),
+    orgName: String(get(SETTING.ORG) || 'SOR')
+  };
 }
 
-function readDateHeaders_(att) {
-  var lastCol = att.getLastColumn();
-  if (lastCol < 1) return [];
-  var tz = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
-  return att.getRange(1, 1, 1, lastCol).getValues()[0].map(function (v) {
-    return v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : String(v).trim();
-  });
-}
-
-/** 1-based column for dateKey, or -1. */
-function findDateColumn_(att, dateKey) {
-  var headers = readDateHeaders_(att);
-  for (var i = FIRST_DATE_COL - 1; i < headers.length; i++) {
-    if (headers[i] === dateKey) return i + 1;
-  }
-  return -1;
-}
-
-function getOrCreateDateColumn_(att, dateKey) {
-  var existing = findDateColumn_(att, dateKey);
-  if (existing > 0) return existing;
-  var headers = readDateHeaders_(att);
-  var idx = AttendanceLogic.insertionIndexForDate(headers, dateKey, FIRST_DATE_COL - 1);
-  var col = idx + 1;
-  if (col <= att.getLastColumn()) {
-    att.insertColumnBefore(col);
-  } else if (col > att.getMaxColumns()) {
-    att.insertColumnAfter(att.getMaxColumns());
-  }
-  att.getRange(1, col).setNumberFormat('@').setValue(dateKey).setFontWeight('bold');
-  applyStatusFormatting_(att); // cover newly added columns
-  return col;
+function getRoster_() {
+  var sheet = SpreadsheetApp.getActive().getSheetByName(TAB.ROSTER);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues()
+    .map(function (r) {
+      return { name: String(r[0]).trim(), email: String(r[1]).trim().toLowerCase() };
+    })
+    .filter(function (m) { return m.name; });
 }
 
 function appendLog_(rows) {
   if (!rows.length) return;
-  var log = SpreadsheetApp.getActive().getSheetByName(SHEET.LOG);
+  var log = SpreadsheetApp.getActive().getSheetByName(TAB.LOG) ||
+    getOrCreateSheet_(SpreadsheetApp.getActive(), TAB.LOG, LOG_HEADERS);
   log.getRange(log.getLastRow() + 1, 1, rows.length, LOG_HEADERS.length).setValues(rows);
 }
 
@@ -450,7 +428,7 @@ function appendLog_(rows) {
 function verifyIdToken_(idToken) {
   if (!idToken) throw new Error('Please sign in.');
   var apiKey = PropertiesService.getScriptProperties().getProperty('FIREBASE_API_KEY');
-  if (!apiKey) throw new Error('Server not configured: run Attendance > Set Firebase API key…');
+  if (!apiKey) throw new Error('Server not configured: run Check-in > Set Firebase API key…');
 
   var cache = CacheService.getScriptCache();
   var cacheKey = 'tok_' + Utilities.base64EncodeWebSafe(
@@ -502,21 +480,26 @@ function getCodeSecret_() {
   }
 }
 
-function codeForStep_(step) {
-  var sig = Utilities.computeHmacSha256Signature(String(step), getCodeSecret_());
+/** Each shift gets its own code sequence, so the code also identifies the shift. */
+function codeFor_(shiftKey, step) {
+  var sig = Utilities.computeHmacSha256Signature(step + '|' + shiftKey, getCodeSecret_());
   return AttendanceLogic.truncateToCode(sig, CODE_DIGITS);
 }
 
-/** Accepts the current window's code and the previous one (for slow typists). */
-function isCurrentCode_(code, nowMs) {
-  if (code.length !== CODE_DIGITS) return false;
+/** The shift whose current or previous code matches, or null. */
+function findShiftForCode_(shifts, code, nowMs) {
+  if (code.length !== CODE_DIGITS) return null;
   var step = AttendanceLogic.timeStep(nowMs, CODE_STEP_SECONDS);
-  return code === codeForStep_(step) || code === codeForStep_(step - 1);
+  for (var i = 0; i < shifts.length; i++) {
+    if (code === codeFor_(shifts[i].key, step) || code === codeFor_(shifts[i].key, step - 1)) {
+      return shifts[i];
+    }
+  }
+  return null;
 }
 
-function json_(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
+function isDate_(v) {
+  return Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime());
 }
 
 function assertDateKey_(dateKey) {
@@ -526,6 +509,17 @@ function assertDateKey_(dateKey) {
 function todayKey_() {
   return Utilities.formatDate(new Date(), SpreadsheetApp.getActive().getSpreadsheetTimeZone(),
     'yyyy-MM-dd');
+}
+
+function nowMinutes_() {
+  var hhmm = Utilities.formatDate(new Date(), SpreadsheetApp.getActive().getSpreadsheetTimeZone(),
+    'HH:mm');
+  return AttendanceLogic.parseTimeLoose(hhmm);
+}
+
+function json_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 function withLock_(fn) {

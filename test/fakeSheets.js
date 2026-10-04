@@ -20,6 +20,14 @@ class FakeRange {
     v.forEach((line, r) => line.forEach((x, c) => this.sheet.set(this.row + r, this.col + c, x)));
     return this;
   }
+  getDisplayValues() {
+    return this.getValues().map((line) => line.map((v) => {
+      if (Object.prototype.toString.call(v) === '[object Date]') {
+        return `${v.getUTCMonth() + 1}/${v.getUTCDate()}/${v.getUTCFullYear()}`;
+      }
+      return String(v ?? '');
+    }));
+  }
   getValue() { return this.sheet.get(this.row, this.col); }
   setValue(x) { this.sheet.set(this.row, this.col, x); return this; }
   setNumberFormat() { return this; }

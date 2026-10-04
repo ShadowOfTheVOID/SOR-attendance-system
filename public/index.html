@@ -44,8 +44,8 @@
     setMsg($('msg'), 'ok', 'Checking in…');
     try {
       const r = await api('checkIn', { code: $('code').value });
-      if (r.alreadyMarked) setMsg($('msg'), 'warn', `You're already marked ${r.status} today.`);
-      else setMsg($('msg'), r.status === 'Late' ? 'warn' : 'ok', `✓ ${r.name}: ${r.status} at ${r.time}`);
+      if (r.alreadyMarked) setMsg($('msg'), 'warn', `You're already marked ${r.status} for ${r.shift}.`);
+      else setMsg($('msg'), 'ok', `✓ ${r.name}: ${r.status} for ${r.shift}`);
       $('code').value = '';
     } catch (e) {
       setMsg($('msg'), 'err', e.message);
@@ -66,11 +66,11 @@
       $('today').textContent = 'Today: ' + me.today;
       $('admin-links').hidden = !me.isAdmin;
       if (!me.member) {
-        $('member-line').innerHTML = `<b>${esc(me.email)}</b> isn't on the roster. Ask an admin to add it.`;
+        $('member-line').innerHTML = `<b>${esc(me.email)}</b> isn't on the Check-in Roster. Ask an admin to add it.`;
         $('checkin-form').classList.add('hidden');
         return;
       }
-      $('member-line').innerHTML = `Hi <b>${esc(me.member.name)}</b> (${esc(me.member.id)})`;
+      $('member-line').innerHTML = `Hi <b>${esc(me.member.name)}</b>`;
       if (!me.selfCheckIn) {
         $('checkin-btn').disabled = true;
         setMsg($('msg'), 'warn', 'Check-in is currently closed.');
