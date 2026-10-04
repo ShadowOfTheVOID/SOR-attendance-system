@@ -1,0 +1,120 @@
+// Minimal in-memory stand-in for the Apps Script services used by Code.js.
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+class FakeRange {
+  constructor(sheet, row, col, nr, nc) { Object.assign(this, { sheet, row, col, nr, nc }); }
+  getValues() {
+    const out = [];
+    for (let r = 0; r < this.nr; r++) {
+      const line = [];
+      for (let c = 0; c < this.nc; c++) line.push(this.sheet.get(this.row + r, this.col + c));
+      out.push(line);
+    }
+    return out;
+  }
+  setValues(v) {
+    if (v.length !== this.nr || v[0].length !== this.nc) throw new Error('dimension mismatch');
+    v.forEach((line, r) => line.forEach((x, c) => this.sheet.set(this.row + r, this.col + c, x)));
+    return this;
+  }
+  getValue() { return this.sheet.get(this.row, this.col); }
+  setValue(x) { this.sheet.set(this.row, this.col, x); return this; }
+  setNumberFormat() { return this; }
+  setFontWeight() { return this; }
+  setBackground() { return this; }
+  insertCheckboxes() { return this; }
+}
+
+class FakeSheet {
+  constructor(name) { this.name = name; this.cells = []; this.maxRows = 1000; this.maxCols = 26; }
+  get(r, c) { return (this.cells[r - 1] || [])[c - 1] ?? ''; }
+  set(r, c, x) {
+    if (r > this.maxRows || c > this.maxCols) throw new Error(`out of bounds R${r}C${c}`);
+    (this.cells[r - 1] ||= [])[c - 1] = x;
+  }
+  getRange(a, b, c, d) {
+    if (typeof a === 'string') {
+      const col = a.charCodeAt(0) - 64;
+      const m = /^[A-Z](\d*)/.exec(a);
+      const row = m[1] ? Number(m[1]) : 1;
+      return new FakeRange(this, row, col, this.maxRows - row + 1, 1);
+    }
+    return new FakeRange(this, a, b, c || 1, d || 1);
+  }
+  getLastRow() {
+    for (let r = this.cells.length; r > 0; r--) {
+      if ((this.cells[r - 1] || []).some((x) => x !== '' && x != null)) return r;
+    }
+    return 0;
+  }
+  getLastColumn() {
+    let max = 0;
+    this.cells.forEach((row) => (row || []).forEach((x, i) => {
+      if (x !== '' && x != null) max = Math.max(max, i + 1);
+    }));
+    return max;
+  }
+  getMaxRows() { return this.maxRows; }
+  getMaxColumns() { return this.maxCols; }
+  insertColumnBefore(col) {
+    this.maxCols++;
+    this.cells.forEach((row) => row && row.splice(col - 1, 0, ''));
+  }
+  insertColumnAfter() { this.maxCols++; }
+  appendRow(values) { const r = this.getLastRow() + 1; values.forEach((x, i) => this.set(r, i + 1, x)); }
+  setFrozenRows() {}
+  setFrozenColumns() {}
+  setConditionalFormatRules() {}
+  getName() { return this.name; }
+}
+
+function load({ now = new Date('2026-10-05T09:00:00Z'), adminPin = '1234' } = {}) {
+  const sheets = {};
+  const ss = {
+    getSheetByName: (n) => sheets[n] || null,
+    insertSheet: (n) => (sheets[n] = new FakeSheet(n)),
+    getSpreadsheetTimeZone: () => 'Etc/UTC',
+    toast() {}
+  };
+  const props = { ADMIN_PIN: adminPin };
+  const cache = {};
+  const rule = () => {
+    const b = { whenTextEqualTo: () => b, setBackground: () => b, setRanges: () => b, build: () => ({}) };
+    return b;
+  };
+  const RealDate = Date;
+  class FixedDate extends RealDate {
+    constructor(...a) { if (a.length) super(...a); else super(clock.now); }
+  }
+  const clock = { now: now.getTime() };
+
+  const context = {
+    Date: FixedDate,
+    SpreadsheetApp: {
+      getActive: () => ss,
+      flush() {},
+      getUi: () => ({ alert() {}, createMenu: () => ({ addItem() { return this; }, addSeparator() { return this; }, addToUi() {} }) }),
+      newConditionalFormatRule: rule
+    },
+    Utilities: {
+      formatDate(d, tz, fmt) {
+        const iso = new RealDate(d.getTime()).toISOString();
+        if (fmt === 'yyyy-MM-dd') return iso.slice(0, 10);
+        if (fmt === 'HH:mm') return iso.slice(11, 16);
+        throw new Error('unsupported format ' + fmt);
+      }
+    },
+    LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => props[k] || null, setProperty: (k, v) => { props[k] = v; } }) },
+    CacheService: { getScriptCache: () => ({ get: (k) => cache[k] || null, put: (k, v) => { cache[k] = v; } }) }
+  };
+  vm.createContext(context);
+  for (const f of ['Logic.js', 'Code.js']) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src', f), 'utf8'), context, { filename: f });
+  }
+  return { app: context, sheets, clock, setTime: (iso) => { clock.now = new RealDate(iso).getTime(); } };
+}
+
+module.exports = { load };
