@@ -33,6 +33,18 @@
       <button class="btn" id="save">Save changes</button>
     </div>
   </section>
+
+  <section class="card signed-in hidden" id="admins-card">
+    <h2 style="margin-top:0;font-size:1.15rem">Admins</h2>
+    <p class="who">Admins can run the display, edit attendance, and add or remove admins.
+      Use the email they sign in to Google with.</p>
+    <ul id="admins" class="admins"></ul>
+    <form id="add-admin" class="row" style="margin-top:8px">
+      <input id="new-admin" type="email" placeholder="name@gmail.com" required>
+      <button class="btn" type="submit" style="margin-top:0;flex:0 0 auto;width:auto;padding:12px 20px">Add</button>
+    </form>
+    <div id="admin-msg" class="msg"></div>
+  </section>
 </main>
 
 <script src="config.js"></script>
@@ -105,6 +117,35 @@
     }
   }
 
+  let myEmail = '';
+
+  function renderAdmins(list) {
+    $('admins').innerHTML = list.map((a) => `<li><span>${esc(a.email)}</span>${
+      a.permanent ? '<small>permanent</small>'
+        : a.email === myEmail ? '<small>you</small>'
+          : `<button data-remove="${esc(a.email)}">Remove</button>`}</li>`).join('');
+  }
+
+  async function adminAction(action, params) {
+    try {
+      renderAdmins((await api(action, params)).admins);
+      $('admin-msg').className = 'msg';
+      return true;
+    } catch (e) {
+      setMsg($('admin-msg'), 'err', e.message);
+      return false;
+    }
+  }
+
+  $('add-admin').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (await adminAction('addAdmin', { email: $('new-admin').value })) $('new-admin').value = '';
+  });
+  $('admins').addEventListener('click', (e) => {
+    const email = e.target.dataset.remove;
+    if (email && confirm(`Remove ${email} as an admin?`)) adminAction('removeAdmin', { email });
+  });
+
   $('rows').addEventListener('change', (e) => { setStatus(e.target.dataset.name, e.target.value); render(); });
   document.querySelectorAll('[data-bulk]').forEach((b) => b.addEventListener('click', () => {
     data.members.forEach((m) => { if (statusOf(m) === 'Not Present') setStatus(m.name, b.dataset.bulk); });
@@ -117,7 +158,12 @@
   requireSignIn(async () => {
     try {
       const me = await api('me');
-      if (!me.isAdmin) return setMsg($('msg'), 'err', 'This account is not an admin.');
+      if (!me.isAdmin) {
+        $('admins-card').classList.add('hidden');
+        return setMsg($('msg'), 'err', 'This account is not an admin.');
+      }
+      myEmail = me.email;
+      adminAction('listAdmins');
       statuses = me.statuses;
       if (!$('date').value) $('date').value = me.today;
       await loadShifts();

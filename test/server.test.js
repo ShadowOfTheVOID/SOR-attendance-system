@@ -9,7 +9,8 @@ const TOKENS = {
   'tok-ghost': { email: 'ghost@example.com', emailVerified: true },
   'tok-stranger': { email: 'stranger@example.com', emailVerified: true },
   'tok-unverified': { email: 'ana@example.com', emailVerified: false },
-  'tok-owner': { email: 'owner@example.com', emailVerified: true }
+  'tok-owner': { email: 'owner@example.com', emailVerified: true },
+  'tok-tedd': { email: 'TeddTony@outlook.com', emailVerified: true }
 };
 
 const day = (y, m, d) => new Date(Date.UTC(y, m - 1, d));
@@ -249,6 +250,9 @@ test('admin-only actions reject students', () => {
   fail(env.call('displayCode', 'tok-ana', { location: 'Hangar 391' }), /Admins only/);
   fail(env.call('getShift', 'tok-ana', { date: '2026-10-04', shiftKey: 'x' }), /Admins only/);
   fail(env.call('saveShift', 'tok-ana', { date: '2026-10-04', shiftKey: 'x', records: [] }), /Admins only/);
+  fail(env.call('listAdmins', 'tok-ana'), /Admins only/);
+  fail(env.call('addAdmin', 'tok-ana', { email: 'ana@example.com' }), /Admins only/);
+  fail(env.call('removeAdmin', 'tok-ana', { email: 'x@example.com' }), /Admins only/);
 });
 
 test('admin can read and edit any shift; changes are logged', () => {
@@ -282,4 +286,47 @@ test('a wrong attendance tab name gives a clear error', () => {
   const row = s.cells.findIndex((r) => r && r[0] === 'Attendance tab') + 1;
   s.set(row, 2, 'Build Season 2027');
   fail(env.call('shifts', 'tok-owner', {}), /"Build Season 2027" not found/);
+});
+
+test('the built-in admin and the setup account are permanent admins', () => {
+  const env = fresh();
+  assert.equal(ok(env.call('me', 'tok-tedd')).isAdmin, true);
+  assert.deepEqual(ok(env.call('listAdmins', 'tok-tedd')).admins, [
+    { email: 'teddtony@outlook.com', permanent: true },
+    { email: 'owner@example.com', permanent: true }
+  ]);
+  fail(env.call('removeAdmin', 'tok-owner', { email: 'teddtony@outlook.com' }), /permanent/);
+});
+
+test('admins can add and remove other admins from the website', () => {
+  const env = fresh();
+  const added = ok(env.call('addAdmin', 'tok-tedd', { email: ' Ana@Example.com ' })).admins;
+  assert.deepEqual(added.at(-1), { email: 'ana@example.com', permanent: false });
+  assert.equal(ok(env.call('me', 'tok-ana')).isAdmin, true);
+  ok(env.call('displayCode', 'tok-ana', { location: 'Hangar 391' }));
+
+  ok(env.call('addAdmin', 'tok-tedd', { email: 'ana@example.com' })); // no duplicate
+  assert.equal(ok(env.call('listAdmins', 'tok-tedd')).admins.length, 3);
+
+  fail(env.call('removeAdmin', 'tok-ana', { email: 'ana@example.com' }), /yourself/);
+  ok(env.call('addAdmin', 'tok-ana', { email: 'cara@example.com' }));
+  ok(env.call('removeAdmin', 'tok-tedd', { email: 'ana@example.com' }));
+  assert.equal(ok(env.call('me', 'tok-ana')).isAdmin, false);
+  assert.equal(ok(env.call('me', 'tok-cara')).isAdmin, true);
+
+  const s = env.sheets['Check-in Settings'];
+  const row = s.cells.findIndex((r) => r && String(r[0]).startsWith('Admin emails')) + 1;
+  assert.equal(s.get(row, 2), 'cara@example.com', 'stored in the settings tab');
+  assert.deepEqual(logRows(env).filter((r) => /^Admin (added|removed)$/.test(r[4])).map((r) => [r[3], r[4], r[6]]), [
+    ['ana@example.com', 'Admin added', 'teddtony@outlook.com'],
+    ['cara@example.com', 'Admin added', 'ana@example.com'],
+    ['ana@example.com', 'Admin removed', 'teddtony@outlook.com']
+  ]);
+});
+
+test('adding an admin validates the email', () => {
+  const env = fresh();
+  fail(env.call('addAdmin', 'tok-tedd', { email: 'not-an-email' }), /not a valid email/);
+  fail(env.call('addAdmin', 'tok-tedd', { email: 'a@b.com, c@d.com' }), /not a valid email/);
+  fail(env.call('addAdmin', 'tok-tedd', {}), /not a valid email/);
 });

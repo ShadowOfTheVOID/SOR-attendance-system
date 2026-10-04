@@ -51,3 +51,9 @@ body.display .card { background:#fff; color:var(--text); max-width:420px; width:
 .shiftpick { color:#cbd5e1; }
 .shiftpick select { width:auto; max-width:90vw; padding:6px 8px; font-size:.95rem; }
 body.display h1 { font-size: clamp(1.1rem, 3vw, 2rem); }
+.admins { list-style:none; padding:0; margin:8px 0; }
+.admins li { display:flex; justify-content:space-between; align-items:center; gap:8px;
+             padding:8px 0; border-bottom:1px solid var(--border); overflow-wrap:anywhere; }
+.admins small { color:var(--muted); }
+.admins button { padding:6px 10px; border:1px solid var(--border); border-radius:6px;
+                 background:#fff; color:var(--err); cursor:pointer; }

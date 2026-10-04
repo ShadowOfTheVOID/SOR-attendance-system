@@ -15,6 +15,10 @@
  *   Check-in Log        every check-in, rejected code and admin edit
  */
 
+// Always admins; can't be removed from the website. The account that set up
+// the script is always an admin too. Other admins are managed on /admin.html.
+var PERMANENT_ADMINS = ['teddtony@outlook.com'];
+
 var TAB = {
   SETTINGS: 'Check-in Settings',
   ROSTER: 'Check-in Roster',
@@ -71,8 +75,7 @@ function setup() {
     .map(function (r) { return r[0]; });
   DEFAULT_SETTINGS.forEach(function (row) {
     if (existing.indexOf(row[0]) !== -1) return;
-    var value = row[0] === SETTING.ADMINS ? Session.getEffectiveUser().getEmail() : row[1];
-    settings.appendRow([row[0], String(value)]);
+    settings.appendRow([row[0], String(row[1])]);
   });
 
   getOrCreateSheet_(ss, TAB.ROSTER, ROSTER_HEADERS);
@@ -118,7 +121,10 @@ var ACTIONS = {
   shifts: apiShifts_,
   displayCode: apiDisplayCode_,
   getShift: apiGetShift_,
-  saveShift: apiSaveShift_
+  saveShift: apiSaveShift_,
+  listAdmins: apiListAdmins_,
+  addAdmin: apiAddAdmin_,
+  removeAdmin: apiRemoveAdmin_
 };
 
 function doGet() {
@@ -302,6 +308,50 @@ function apiSaveShift_(user, req) {
   });
 }
 
+/** Admin: everyone who is an admin, and which ones are permanent. */
+function apiListAdmins_(user) {
+  requireAdmin_(user);
+  var permanent = permanentAdmins_();
+  var listed = getSettings_().adminEmails.filter(function (e) { return permanent.indexOf(e) === -1; });
+  return {
+    admins: permanent.map(function (e) { return { email: e, permanent: true }; })
+      .concat(listed.map(function (e) { return { email: e, permanent: false }; }))
+  };
+}
+
+function apiAddAdmin_(user, req) {
+  requireAdmin_(user);
+  var email = String(req.email == null ? '' : req.email).trim().toLowerCase();
+  if (!/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(email)) {
+    throw new Error('"' + email + '" is not a valid email address.');
+  }
+  return withLock_(function () {
+    var admins = getSettings_().adminEmails;
+    if (admins.indexOf(email) === -1 && permanentAdmins_().indexOf(email) === -1) {
+      setSetting_(SETTING.ADMINS, admins.concat([email]).join(', '));
+      appendLog_([[new Date(), todayKey_(), '', email, 'Admin added', 'Admin', user.email]]);
+    }
+    return apiListAdmins_(user);
+  });
+}
+
+function apiRemoveAdmin_(user, req) {
+  requireAdmin_(user);
+  var email = String(req.email == null ? '' : req.email).trim().toLowerCase();
+  if (permanentAdmins_().indexOf(email) !== -1) {
+    throw new Error(email + ' is a permanent admin and can\'t be removed here.');
+  }
+  if (email === user.email) throw new Error('You can\'t remove yourself. Ask another admin.');
+  return withLock_(function () {
+    var admins = getSettings_().adminEmails;
+    if (admins.indexOf(email) !== -1) {
+      setSetting_(SETTING.ADMINS, admins.filter(function (e) { return e !== email; }).join(', '));
+      appendLog_([[new Date(), todayKey_(), '', email, 'Admin removed', 'Admin', user.email]]);
+    }
+    return apiListAdmins_(user);
+  });
+}
+
 // ---------------------------------------------------------------- Attendance tab
 
 function getAttendanceSheet_() {
@@ -478,8 +528,31 @@ function verifyIdToken_(idToken) {
   return user;
 }
 
+/** PERMANENT_ADMINS plus the account the script runs as (the one that set it up). */
+function permanentAdmins_() {
+  var out = PERMANENT_ADMINS.map(function (e) { return e.toLowerCase(); });
+  var owner = String(Session.getEffectiveUser().getEmail() || '').toLowerCase();
+  if (owner && out.indexOf(owner) === -1) out.push(owner);
+  return out;
+}
+
 function isAdmin_(user, settings) {
-  return settings.adminEmails.indexOf(user.email) !== -1;
+  return permanentAdmins_().indexOf(user.email) !== -1 ||
+    settings.adminEmails.indexOf(user.email) !== -1;
+}
+
+/** Writes a Check-in Settings value, adding the row if it is missing. */
+function setSetting_(key, value) {
+  var sheet = getOrCreateSheet_(SpreadsheetApp.getActive(), TAB.SETTINGS, ['Setting', 'Value']);
+  var last = sheet.getLastRow();
+  var keys = last > 1 ? sheet.getRange(2, 1, last - 1, 1).getValues() : [];
+  for (var i = 0; i < keys.length; i++) {
+    if (keys[i][0] === key) {
+      sheet.getRange(i + 2, 2).setValue(value);
+      return;
+    }
+  }
+  sheet.getRange(last + 1, 1, 1, 2).setValues([[key, value]]);
 }
 
 function requireAdmin_(user) {

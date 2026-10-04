@@ -51,7 +51,7 @@ It adds three small tabs of its own:
 |---|---|---|
 | `/` | Students | Sign in with Google, then scan the QR code or type the 6-digit code. |
 | `/display.html` | Admins | Put it on a projector or tablet. It shows the live code, a countdown, the QR code and which shift check-ins are going to right now. If a day has more than one location (e.g. Hangar 391 + Online), pick the location; for **Online**, screen-share it on Zoom. |
-| `/admin.html` | Admins | Pick a date and shift, then set any student's status from the sheet's own dropdown values. Each change is logged. |
+| `/admin.html` | Admins | Pick a date and shift, then set any student's status from the sheet's own dropdown values. Each change is logged. The **Admins** section adds or removes admins by email. |
 
 ### Which shift does a check-in count for?
 
@@ -99,8 +99,9 @@ You need edit access to the attendance spreadsheet, and Node.js
    "2026-2027 SOR Student Information & Roster". Each one must be the account
    they'll sign in with.
 8. In **Check-in Settings**:
-   - **Admin emails** already has the setup account. Add the leads/mentors who
-     run the display, comma-separated.
+   - You don't need to touch **Admin emails**. The setup account and
+     `teddtony@outlook.com` are always admins, and any admin can add or remove
+     others on `/admin.html` → **Admins**. Those changes are saved in this row.
    - **Attendance tab** is `Offseason 2026`. Change it when build season gets
      its own tab.
 
