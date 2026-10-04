@@ -100,6 +100,31 @@ var AttendanceLogic = (function () {
     return next !== -1 ? next : shifts.length - 1;
   }
 
+  /**
+   * The shift a check-in at nowMin belongs to, or -1. A running shift wins;
+   * where two overlap, the later-starting (next) one wins. Before any shift
+   * starts, check-in opens earlyMin minutes ahead for the next shift.
+   * Missing times count as "all day".
+   */
+  function pickShiftAt(shifts, nowMin, earlyMin) {
+    var running = -1;
+    var upcoming = -1;
+    shifts.forEach(function (s, i) {
+      var start = s.start == null ? 0 : s.start;
+      var end = s.end == null ? 24 * 60 : s.end;
+      if (nowMin >= start && nowMin <= end) {
+        if (running === -1 || start >= startOf(shifts[running])) running = i;
+      } else if (nowMin < start && nowMin >= start - earlyMin) {
+        if (upcoming === -1 || start < startOf(shifts[upcoming])) upcoming = i;
+      }
+    });
+    return running !== -1 ? running : upcoming;
+  }
+
+  function startOf(s) {
+    return s.start == null ? 0 : s.start;
+  }
+
   /** Row index (0-based) of the first label in column A starting with prefix, or -1. */
   function findLabelRow(colA, prefix) {
     var p = normalize(prefix);
@@ -179,6 +204,7 @@ var AttendanceLogic = (function () {
     formatMinutes: formatMinutes,
     shiftLabel: shiftLabel,
     pickDefaultShift: pickDefaultShift,
+    pickShiftAt: pickShiftAt,
     findLabelRow: findLabelRow,
     findMemberByEmail: findMemberByEmail,
     sameName: sameName,

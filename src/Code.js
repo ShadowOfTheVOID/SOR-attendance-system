@@ -4,8 +4,9 @@
  *
  * The web pages live on Firebase Hosting and call doPost() with a Firebase
  * ID token from Google sign-in. A check-in needs the rotating code shown on
- * the in-room display; the display is tied to one shift (one column of the
- * attendance tab), and a valid code marks the student "Present" there.
+ * the display for a location (e.g. "Hangar 391" or "Online"). The time of
+ * the check-in decides which of that location's shifts (columns) it counts
+ * for; where shifts overlap, the next shift wins.
  *
  * Existing tabs are only read, except for single student cells in the
  * attendance tab. This script adds three tabs of its own:
@@ -42,6 +43,7 @@ var LABEL = {
   END: 'End Time',
   STUDENTS_AFTER: 'Avg Attendees'
 };
+var EARLY_CHECK_IN_MINUTES = 30; // check-in opens this long before a shift starts
 var CODE_STEP_SECONDS = 30; // a code is accepted for its window plus the previous one
 var CODE_DIGITS = 6;
 var MAX_CODE_FAILURES = 5;  // per account per 10 minutes
@@ -172,12 +174,17 @@ function apiCheckIn_(user, req) {
   if (!shifts.length) throw new Error('There is no shift today in "' + sheet.getName() + '".');
 
   var code = AttendanceLogic.normalizeCode(req.code);
-  var shift = findShiftForCode_(shifts, code, now.getTime());
-  if (!shift) {
+  var location = findLocationForCode_(locationsOf_(shifts), today, code, now.getTime());
+  if (location === null) {
     cache.put(failKey, String(failures + 1), 600);
     appendLog_([[now, today, '', member.name, 'Rejected', 'Self check-in',
       user.email + ': wrong or expired code "' + code + '"']]);
     throw new Error('That code is wrong or has expired. Enter the code on the screen right now.');
+  }
+  var shift = currentShift_(shifts, location);
+  if (!shift) {
+    throw new Error('No ' + (location || '') + ' shift is running right now. Check-in opens ' +
+      EARLY_CHECK_IN_MINUTES + ' minutes before a shift starts.');
   }
 
   var student = findStudent_(layout, member.name);
@@ -206,26 +213,39 @@ function apiShifts_(user, req) {
   var sheet = getAttendanceSheet_();
   var shifts = readShifts_(sheet, readLayout_(sheet), date);
   var idx = date === todayKey_() ? AttendanceLogic.pickDefaultShift(shifts, nowMinutes_()) : 0;
+  var def = shifts.length ? shifts[Math.max(idx, 0)] : null;
   return {
     date: date,
     tab: sheet.getName(),
     shifts: shifts.map(function (s) { return { key: s.key, label: s.label }; }),
-    defaultKey: shifts.length ? shifts[Math.max(idx, 0)].key : null
+    defaultKey: def ? def.key : null,
+    locations: locationsOf_(shifts),
+    defaultLocation: def ? def.location : null
   };
 }
 
-/** Admin: the code to show on the display for one of today's shifts. */
+/**
+ * Admin: the code to show on the display for one of today's locations, and
+ * the shift a check-in right now would count for.
+ */
 function apiDisplayCode_(user, req) {
   requireAdmin_(user);
   var sheet = getAttendanceSheet_();
-  var shift = findShiftByKey_(readShifts_(sheet, readLayout_(sheet), todayKey_()), req.shiftKey);
+  var today = todayKey_();
+  var shifts = readShifts_(sheet, readLayout_(sheet), today);
+  var location = String(req.location == null ? '' : req.location);
+  if (locationsOf_(shifts).indexOf(location) === -1) {
+    throw new Error('No ' + (location || '') + ' shift today. Reload and pick a location.');
+  }
+  var shift = currentShift_(shifts, location);
   var nowMs = new Date().getTime();
   var step = AttendanceLogic.timeStep(nowMs, CODE_STEP_SECONDS);
   return {
-    code: codeFor_(shift.key, step),
+    code: codeFor_(today, location, step),
     expiresInMs: (step + 1) * CODE_STEP_SECONDS * 1000 - nowMs,
     stepSeconds: CODE_STEP_SECONDS,
-    shift: shift.label,
+    location: location,
+    shift: shift ? shift.label : null,
     orgName: getSettings_().orgName
   };
 }
@@ -480,19 +500,37 @@ function getCodeSecret_() {
   }
 }
 
-/** Each shift gets its own code sequence, so the code also identifies the shift. */
-function codeFor_(shiftKey, step) {
-  var sig = Utilities.computeHmacSha256Signature(step + '|' + shiftKey, getCodeSecret_());
+/** Distinct locations among the shifts, in column order. */
+function locationsOf_(shifts) {
+  var out = [];
+  shifts.forEach(function (s) {
+    if (out.indexOf(s.location) === -1) out.push(s.location);
+  });
+  return out;
+}
+
+/** The shift at this location that a check-in right now counts for, or null. */
+function currentShift_(shifts, location) {
+  var here = shifts.filter(function (s) { return s.location === location; });
+  var i = AttendanceLogic.pickShiftAt(here, nowMinutes_(), EARLY_CHECK_IN_MINUTES);
+  return i === -1 ? null : here[i];
+}
+
+/** Each location gets its own code sequence per day, so the code says where the student is. */
+function codeFor_(dateKey, location, step) {
+  var sig = Utilities.computeHmacSha256Signature(
+    step + '|' + dateKey + '|' + location.toLowerCase(), getCodeSecret_());
   return AttendanceLogic.truncateToCode(sig, CODE_DIGITS);
 }
 
-/** The shift whose current or previous code matches, or null. */
-function findShiftForCode_(shifts, code, nowMs) {
+/** The location whose current or previous code matches, or null. */
+function findLocationForCode_(locations, dateKey, code, nowMs) {
   if (code.length !== CODE_DIGITS) return null;
   var step = AttendanceLogic.timeStep(nowMs, CODE_STEP_SECONDS);
-  for (var i = 0; i < shifts.length; i++) {
-    if (code === codeFor_(shifts[i].key, step) || code === codeFor_(shifts[i].key, step - 1)) {
-      return shifts[i];
+  for (var i = 0; i < locations.length; i++) {
+    if (code === codeFor_(dateKey, locations[i], step) ||
+      code === codeFor_(dateKey, locations[i], step - 1)) {
+      return locations[i];
     }
   }
   return null;

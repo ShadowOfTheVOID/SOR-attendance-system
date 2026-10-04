@@ -11,8 +11,9 @@
 <main>
   <section class="card" id="auth"></section>
   <div class="signed-in hidden">
-    <p class="shiftpick"><label for="shift">Shift</label> <select id="shift"></select></p>
+    <p class="shiftpick hidden" id="locpick"><label for="location">Location</label> <select id="location"></select></p>
     <h1 id="title">Check in</h1>
+    <p class="hint" id="now"></p>
     <p class="hint">Scan the QR code, or go to <b id="site"></b> and enter:</p>
     <div class="bigcode" id="code">······</div>
     <div class="bar"><div id="bar"></div></div>
@@ -39,10 +40,12 @@
 
   async function refresh() {
     clearTimeout(timer);
-    if (!$('shift').value) return;
     try {
-      const d = await api('displayCode', { shiftKey: $('shift').value });
-      $('title').textContent = d.shift;
+      const d = await api('displayCode', { location: $('location').value });
+      $('title').textContent = d.location;
+      $('now').textContent = d.shift
+        ? 'Checking in for: ' + d.shift
+        : 'No shift running right now (check-in opens 30 min before a shift).';
       $('code').textContent = d.code.replace(/(\d{3})(\d{3})/, '$1 $2');
       showQr(d.code);
       $('err').textContent = '';
@@ -61,7 +64,7 @@
     requestAnimationFrame(tick);
   })();
 
-  $('shift').addEventListener('change', refresh);
+  $('location').addEventListener('change', refresh);
   $('fs').onclick = () => document.documentElement.requestFullscreen?.();
 
   requireSignIn(async () => {
@@ -71,8 +74,9 @@
         $('err').textContent = `No shifts today in "${s.tab}".`;
         return;
       }
-      $('shift').innerHTML = s.shifts.map((x) =>
-        `<option value="${esc(x.key)}"${x.key === s.defaultKey ? ' selected' : ''}>${esc(x.label)}</option>`).join('');
+      $('location').innerHTML = s.locations.map((l) =>
+        `<option value="${esc(l)}"${l === s.defaultLocation ? ' selected' : ''}>${esc(l || '(no location)')}</option>`).join('');
+      $('locpick').classList.toggle('hidden', s.locations.length < 2);
       refresh();
     } catch (e) {
       $('err').textContent = e.message;

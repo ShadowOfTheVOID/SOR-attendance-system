@@ -36,6 +36,24 @@ test('pickDefaultShift prefers running shift with latest start, then next, then 
   assert.equal(L.pickDefaultShift([], 600), -1);
 });
 
+test('pickShiftAt: running shift, overlap goes to the next shift, early window', () => {
+  const s = [
+    { start: 9 * 60 + 45, end: 13 * 60 + 15 }, // 9:45–1:15
+    { start: 13 * 60, end: 16 * 60 + 15 }      // 1:00–4:15
+  ];
+  assert.equal(L.pickShiftAt(s, 10 * 60, 30), 0);
+  assert.equal(L.pickShiftAt(s, 12 * 60 + 59, 30), 0, 'not stolen by next shift\'s early window');
+  assert.equal(L.pickShiftAt(s, 13 * 60, 30), 1, 'overlap starts: next shift');
+  assert.equal(L.pickShiftAt(s, 13 * 60 + 15, 30), 1, 'still overlap: next shift');
+  assert.equal(L.pickShiftAt(s, 9 * 60 + 15, 30), 0, '30 min early');
+  assert.equal(L.pickShiftAt(s, 9 * 60 + 14, 30), -1, 'too early');
+  assert.equal(L.pickShiftAt(s, 16 * 60 + 16, 30), -1, 'after the last shift');
+  assert.equal(L.pickShiftAt([{ start: null, end: null }], 600, 30), 0, 'no times = all day');
+  // 3 chained shifts with 15-min overlaps (like 10/3)
+  const chain = [{ start: 510, end: 630 }, { start: 615, end: 735 }, { start: 720, end: 840 }];
+  assert.deepEqual([600, 620, 700, 725, 800].map((t) => L.pickShiftAt(chain, t, 30)), [0, 1, 1, 2, 2]);
+});
+
 test('findLabelRow matches the start of column A labels', () => {
   const colA = ['x5', 'Date', 'Shift Number', 'Start Time\nShould start 15 min. prior', 'Avg Attendees'];
   assert.equal(L.findLabelRow(colA, 'date'), 1);

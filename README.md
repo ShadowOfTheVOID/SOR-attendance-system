@@ -48,13 +48,24 @@ It adds three small tabs of its own:
 | Page | Who | What |
 |---|---|---|
 | `/` | Students | Sign in with Google, then scan the QR code or type the 6-digit code. |
-| `/display.html` | Admins | Pick the shift (it defaults to the one running now) and put it on a projector or tablet. It shows the live code, a countdown and the QR code. For **Online** shifts, screen-share it on Zoom. |
+| `/display.html` | Admins | Put it on a projector or tablet. It shows the live code, a countdown, the QR code and which shift check-ins are going to right now. If a day has more than one location (e.g. Hangar 391 + Online), pick the location; for **Online**, screen-share it on Zoom. |
 | `/admin.html` | Admins | Pick a date and shift, then set any student's status from the sheet's own dropdown values. Each change is logged. |
 
-On days with overlapping shifts (e.g. 10/4 has Shift 1 and Shift 2 at the
-Hangar plus Online), run one display per shift, or switch the dropdown when the
-next shift starts. Each shift has its own codes, so the code tells the server
-which column to mark.
+### Which shift does a check-in count for?
+
+The **time of the check-in** decides, using that day's Start/End Time rows for
+the display's location:
+
+- **During a shift:** it counts for that shift.
+- **During an overlap** (e.g. Shift 1 9:45–1:15 and Shift 2 1:00–4:15): it
+  counts for the **next** shift.
+- **Up to 30 minutes before a shift:** it counts for that shift, unless another
+  shift is still running.
+- **Outside all shifts:** check-in is refused, and it doesn't count as a wrong
+  code.
+
+A student who stays for two shifts checks in once for each. The display can
+stay open all day, because it always shows which shift check-ins are going to.
 
 ---
 
@@ -134,7 +145,8 @@ It prints your site address, for example `https://sor-attendance.web.app`.
 ### Step 5: Try it
 
 1. On a laptop or projector, open `https://<your-site>/display.html`, sign in
-   with an admin account, check the **Shift** dropdown, and click **Full screen**.
+   with an admin account, and click **Full screen**. Under the location it
+   says which shift check-ins are going to.
 2. On your phone, scan the QR code and sign in with a Google account that is on
    the Check-in Roster. You should see ✓ *Present for …*, and that student's
    cell in the shift's column changes to `Present`.
@@ -143,8 +155,10 @@ It prints your site address, for example `https://sor-attendance.web.app`.
 
 ## Day-to-day
 
-- **Start of a shift:** open the display page and pick the shift. With no
-  display open, nobody can check in.
+- **Shift days:** open the display page once. It follows the schedule on its
+  own. With no display open, nobody can check in.
+- **Times matter now:** keep each shift's Start/End Time correct in the sheet,
+  because they decide where check-ins go.
 - **Close check-in:** set *Self check-in enabled* to `FALSE` in Check-in Settings.
 - **New student:** add their row to the attendance tab as usual, then run
   **Check-in → Add student names to Check-in Roster** and fill in their email.

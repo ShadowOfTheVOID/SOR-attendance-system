@@ -69,7 +69,8 @@ const ok = (res) => { assert.equal(res.ok, true, res.error); return res.data; };
 const fail = (res, re) => { assert.equal(res.ok, false, 'expected failure'); assert.match(res.error, re); };
 const shifts = (env, date) => ok(env.call('shifts', 'tok-owner', date ? { date } : {}));
 const keyOf = (env, labelPart, date) => shifts(env, date).shifts.find((s) => s.label.includes(labelPart)).key;
-const codeFor = (env, key) => ok(env.call('displayCode', 'tok-owner', { shiftKey: key })).code;
+const display = (env, location) => ok(env.call('displayCode', 'tok-owner', { location }));
+const codeAt = (env, location) => display(env, location).code;
 const COL = { oct3: 9, oct4s1: 10, oct4s2: 11, oct4online: 12, oct6: 13 };
 const ROW = { ana: 33, ben: 34, cara: 36 };
 const logRows = (env) => env.sheets['Check-in Log'].cells.slice(1).filter(Boolean);
@@ -87,7 +88,7 @@ test('setup adds only the three check-in tabs and lists students on the roster',
   assert.equal(env.sheets['Check-in Roster'].getLastRow(), 5);
 });
 
-test('shifts lists the day\'s columns and defaults to the one running now', () => {
+test('shifts lists the day\'s columns, locations, and what is running now', () => {
   const env = fresh(); // 13:10 on 10/4: shift 1 (9:45–1:15) and shift 2 (1:00–4:15) overlap
   const s = shifts(env);
   assert.equal(s.date, '2026-10-04');
@@ -96,57 +97,77 @@ test('shifts lists the day\'s columns and defaults to the one running now', () =
     'Sun 10/4 · Shift 2 · Hangar 391 · 1:00 PM–4:15 PM',
     'Sun 10/4 · Shift 1 · Online · 3:00 PM–4:00 PM'
   ]);
-  assert.equal(s.defaultKey, s.shifts[1].key, 'latest-started running shift');
+  assert.equal(s.defaultKey, s.shifts[1].key);
+  assert.deepEqual(s.locations, ['Hangar 391', 'Online']);
+  assert.equal(s.defaultLocation, 'Hangar 391');
   const oct3 = shifts(env, '2026-10-03').shifts;
   assert.equal(oct3[0].label, 'Sat 10/3 · Shift 1 · Hangar 391 · 4:45 PM–8:15 PM', 'edited times use the new value');
 });
 
-test('check-in marks Present in the column of the shift on the display', () => {
+test('the check-in time picks the shift; the overlap counts for the next shift', () => {
   const env = fresh();
-  const key = keyOf(env, 'Shift 2');
-  const r = ok(env.call('checkIn', 'tok-ana', { code: codeFor(env, key) }));
-  assert.equal(r.status, 'Present');
-  assert.match(r.shift, /Shift 2/);
+  const at = (iso, tok) => { env.setTime(iso); return ok(env.call('checkIn', tok, { code: codeAt(env, 'Hangar 391') })); };
+
+  assert.match(at('2026-10-04T09:20:00Z', 'tok-ana').shift, /Shift 1/, '25 min early: shift 1');
+  assert.equal(env.att.get(ROW.ana, COL.oct4s1), 'Present');
+
+  assert.match(at('2026-10-04T13:05:00Z', 'tok-cara').shift, /Shift 2/, 'overlap: next shift');
+  assert.equal(env.att.get(ROW.cara, COL.oct4s2), 'Present');
+  assert.equal(env.att.get(ROW.cara, COL.oct4s1), 'Not Present');
+
+  assert.match(at('2026-10-04T13:20:00Z', 'tok-ana').shift, /Shift 2/, 'staying for shift 2 checks in again');
   assert.equal(env.att.get(ROW.ana, COL.oct4s2), 'Present');
-  assert.equal(env.att.get(ROW.ana, COL.oct4s1), 'Not Present', 'other shifts untouched');
   assert.equal(env.att.get(ROW.ana, 2), '=TRUNC(...)', 'formula columns untouched');
   assert.equal(env.att.get(35, COL.oct4s2), '', 'separator row untouched');
-  assert.equal(logRows(env).at(-1)[4], 'Present');
 });
 
-test('two displays for different shifts give different codes, each marking its own column', () => {
+test('the display shows which shift check-ins are going to', () => {
+  const env = fresh({ now: new Date('2026-10-04T13:05:00Z') });
+  assert.match(display(env, 'Hangar 391').shift, /Shift 2 · Hangar 391/);
+  assert.equal(display(env, 'Online').shift, null, 'online shift not open yet');
+  env.setTime('2026-10-04T14:35:00Z');
+  assert.match(display(env, 'Online').shift, /Online/);
+  fail(env.call('displayCode', 'tok-owner', { location: 'Moon Base' }), /No Moon Base shift today/);
+});
+
+test('each location has its own code; a Hangar code never marks the Online column', () => {
   const env = fresh({ now: new Date('2026-10-04T15:10:00Z') });
-  const hangar = keyOf(env, 'Shift 2');
-  const online = keyOf(env, 'Online');
-  const c1 = codeFor(env, hangar);
-  const c2 = codeFor(env, online);
-  assert.notEqual(c1, c2);
-  ok(env.call('checkIn', 'tok-ana', { code: c1 }));
-  ok(env.call('checkIn', 'tok-cara', { code: c2 }));
+  const hangar = codeAt(env, 'Hangar 391');
+  const online = codeAt(env, 'Online');
+  assert.notEqual(hangar, online);
+  ok(env.call('checkIn', 'tok-ana', { code: hangar }));
+  ok(env.call('checkIn', 'tok-cara', { code: online }));
   assert.equal(env.att.get(ROW.ana, COL.oct4s2), 'Present');
+  assert.equal(env.att.get(ROW.ana, COL.oct4online), 'Not Present');
   assert.equal(env.att.get(ROW.cara, COL.oct4online), 'Present');
   assert.equal(env.att.get(ROW.cara, COL.oct4s2), 'Not Present');
 });
 
+test('a valid code outside any shift time is refused without counting as a wrong code', () => {
+  const env = fresh({ now: new Date('2026-10-04T08:00:00Z') });
+  const code = codeAt(env, 'Hangar 391');
+  for (let i = 0; i < 6; i++) fail(env.call('checkIn', 'tok-ana', { code }), /No Hangar 391 shift is running/);
+  env.setTime('2026-10-04T09:30:00Z');
+  ok(env.call('checkIn', 'tok-ana', { code: codeAt(env, 'Hangar 391') }));
+});
+
 test('check-in never overrides Partial/Unproductive, and repeats are no-ops', () => {
-  const env = fresh();
-  const key = keyOf(env, 'Shift 1 · Hangar');
-  const r = ok(env.call('checkIn', 'tok-ben', { code: codeFor(env, key) }));
+  const env = fresh({ now: new Date('2026-10-04T11:00:00Z') });
+  const r = ok(env.call('checkIn', 'tok-ben', { code: codeAt(env, 'Hangar 391') }));
   assert.equal(r.alreadyMarked, true);
   assert.equal(env.att.get(ROW.ben, COL.oct4s1), 'Partial');
 
-  ok(env.call('checkIn', 'tok-ana', { code: codeFor(env, key) }));
-  assert.equal(ok(env.call('checkIn', 'tok-ana', { code: codeFor(env, key) })).alreadyMarked, true);
+  ok(env.call('checkIn', 'tok-ana', { code: codeAt(env, 'Hangar 391') }));
+  assert.equal(ok(env.call('checkIn', 'tok-ana', { code: codeAt(env, 'Hangar 391') })).alreadyMarked, true);
   assert.equal(logRows(env).filter((r) => r[4] === 'Present').length, 1);
 });
 
 test('codes rotate: the previous window is accepted, older codes are not', () => {
   const env = fresh();
   env.setTime('2026-10-04T13:10:05Z');
-  const key = keyOf(env, 'Shift 2');
-  const code = codeFor(env, key);
+  const code = codeAt(env, 'Hangar 391');
   env.setTime('2026-10-04T13:10:35Z');
-  assert.notEqual(codeFor(env, key), code);
+  assert.notEqual(codeAt(env, 'Hangar 391'), code);
   ok(env.call('checkIn', 'tok-ana', { code }));
   env.setTime('2026-10-04T13:11:05Z');
   fail(env.call('checkIn', 'tok-cara', { code }), /wrong or has expired/);
@@ -157,24 +178,21 @@ test('codes rotate: the previous window is accepted, older codes are not', () =>
 test('a code for another day\'s shift does not work today', () => {
   const env = fresh();
   const step = Math.floor(Date.parse('2026-10-04T13:10:00Z') / 30000);
-  const otherDayKey = shifts(env, '2026-10-06').shifts[0].key;
-  const forged = env.app.codeFor_(otherDayKey, step);
+  const forged = env.app.codeFor_('2026-10-06', 'Hangar 391', step);
   fail(env.call('checkIn', 'tok-ana', { code: forged }), /wrong/);
 });
 
 test('wrong codes are rate-limited per account', () => {
   const env = fresh();
-  const key = keyOf(env, 'Shift 2');
   for (let i = 0; i < 5; i++) fail(env.call('checkIn', 'tok-ana', { code: '000000' }), /wrong/);
-  fail(env.call('checkIn', 'tok-ana', { code: codeFor(env, key) }), /Too many/);
-  ok(env.call('checkIn', 'tok-cara', { code: codeFor(env, key) }));
+  fail(env.call('checkIn', 'tok-ana', { code: codeAt(env, 'Hangar 391') }), /Too many/);
+  ok(env.call('checkIn', 'tok-cara', { code: codeAt(env, 'Hangar 391') }));
 });
 
 test('check-in errors: not on roster, roster name missing from tab, no shift today, closed', () => {
   const env = fresh();
-  const key = keyOf(env, 'Shift 2');
-  fail(env.call('checkIn', 'tok-stranger', { code: codeFor(env, key) }), /not on the Check-in Roster/);
-  fail(env.call('checkIn', 'tok-ghost', { code: codeFor(env, key) }), /not a row in the attendance tab/);
+  fail(env.call('checkIn', 'tok-stranger', { code: codeAt(env, 'Hangar 391') }), /not on the Check-in Roster/);
+  fail(env.call('checkIn', 'tok-ghost', { code: codeAt(env, 'Hangar 391') }), /not a row in the attendance tab/);
 
   env.setTime('2026-10-05T18:00:00Z');
   fail(env.call('checkIn', 'tok-ana', { code: '123456' }), /no shift today/);
@@ -206,7 +224,7 @@ test('missing Firebase API key is reported', () => {
 test('admin-only actions reject students', () => {
   const env = fresh();
   fail(env.call('shifts', 'tok-ana', {}), /Admins only/);
-  fail(env.call('displayCode', 'tok-ana', { shiftKey: 'x' }), /Admins only/);
+  fail(env.call('displayCode', 'tok-ana', { location: 'Hangar 391' }), /Admins only/);
   fail(env.call('getShift', 'tok-ana', { date: '2026-10-04', shiftKey: 'x' }), /Admins only/);
   fail(env.call('saveShift', 'tok-ana', { date: '2026-10-04', shiftKey: 'x', records: [] }), /Admins only/);
 });
@@ -234,8 +252,6 @@ test('admin input is validated', () => {
   fail(env.call('saveShift', 'tok-owner', { date: '2026-10-04', shiftKey: key,
     records: [{ name: 'Ana Alvarez', status: 'Late' }] }), /Invalid status/);
   fail(env.call('getShift', 'tok-owner', { date: '2026-10-04', shiftKey: 'nope' }), /no longer exists/);
-  fail(env.call('displayCode', 'tok-owner', { shiftKey: keyOf(env, 'Hangar', '2026-10-06') }), /no longer exists/,
-    'display only works for today\'s shifts');
 });
 
 test('a wrong attendance tab name gives a clear error', () => {
