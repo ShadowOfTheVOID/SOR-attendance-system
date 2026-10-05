@@ -2,10 +2,10 @@
 window.APP_CONFIG = {
   // Firebase console → Project settings → General → Your apps → Web app → SDK setup (Config)
   firebase: {
-    apiKey: 'PASTE_API_KEY',
-    authDomain: 'YOUR-PROJECT.firebaseapp.com',
-    projectId: 'YOUR-PROJECT',
-    appId: 'PASTE_APP_ID'
+    apiKey: 'AIzaSyCDGs1NXDoFwP0jBM5bASz-XfEcXdYOE4M',
+    authDomain: 'sor-attendance.firebaseapp.com',
+    projectId: 'sor-attendance',
+    appId: '1:104564537181:web:bccfebd0484c4f980adab4'
   },
   // Apps Script → Deploy → Manage deployments → Web app URL (ends in /exec)
   scriptUrl: 'https://script.google.com/macros/s/PASTE_DEPLOYMENT_ID/exec'
