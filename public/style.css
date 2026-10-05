@@ -57,3 +57,6 @@ body.display h1 { font-size: clamp(1.1rem, 3vw, 2rem); }
 .admins small { color:var(--muted); }
 .admins button { padding:6px 10px; border:1px solid var(--border); border-radius:6px;
                  background:#fff; color:var(--err); cursor:pointer; }
+.choice { display:flex; align-items:center; gap:8px; font-weight:500; padding:10px 12px;
+          border:1px solid var(--border); border-radius:8px; cursor:pointer; margin:0; }
+.choice input { width:auto; }

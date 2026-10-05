@@ -157,9 +157,18 @@ var AttendanceLogic = (function () {
     return nowMin > shiftStartMin + partialAfterMin ? 'Partial' : 'Present';
   }
 
-  /** "parent" when a roster Role cell starts with "parent", otherwise "student". */
+  /** "parent" / "mentor" when a roster Role cell starts with that word, otherwise "student". */
   function roleOf(roleCell) {
-    return normalize(roleCell).indexOf('parent') === 0 ? 'parent' : 'student';
+    var r = normalize(roleCell);
+    if (r.indexOf('parent') === 0) return 'parent';
+    if (r.indexOf('mentor') === 0) return 'mentor';
+    return 'student';
+  }
+
+  /** A sign-up slot nobody has taken: blank, or the dropdown's "Empty". */
+  function isEmptySlot(value) {
+    var v = normalize(value);
+    return v === '' || v === 'empty';
   }
 
   function firstName(name) {
@@ -167,9 +176,9 @@ var AttendanceLogic = (function () {
   }
 
   /**
-   * Whether a parent-slot cell (typed by hand when signing up) refers to this
-   * parent: full name, one of their aliases, or just their first name when no
-   * other parent on the roster shares it.
+   * Whether a parent/mentor slot cell refers to this person: full name, one
+   * of their aliases, or just their first name when nobody else in the same
+   * group (allParents) shares it.
    */
   function parentSlotMatches(slotText, parent, allParents) {
     var t = normalize(slotText);
@@ -250,6 +259,7 @@ var AttendanceLogic = (function () {
     sameName: sameName,
     statusForCheckIn: statusForCheckIn,
     roleOf: roleOf,
+    isEmptySlot: isEmptySlot,
     parentSlotMatches: parentSlotMatches,
     mergeCheckIn: mergeCheckIn,
     parseMinutes: parseMinutes,

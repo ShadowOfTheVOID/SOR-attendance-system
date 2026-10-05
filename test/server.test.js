@@ -12,6 +12,8 @@ const TOKENS = {
   'tok-owner': { email: 'owner@example.com', emailVerified: true },
   'tok-pat': { email: 'pat@example.com', emailVerified: true },     // parent, signed up as "Pat"
   'tok-quinn': { email: 'quinn@example.com', emailVerified: true }, // parent, not signed up
+  'tok-venkat': { email: 'venkat@example.com', emailVerified: true }, // mentor, signed up 10/4 shift 2
+  'tok-liz': { email: 'liz@example.com', emailVerified: true },       // mentor, not signed up
   'tok-tedd': { email: 'NhsTedd@gmail.com', emailVerified: true }
 };
 
@@ -36,7 +38,7 @@ function buildAttendanceTab(env) {
   label(2, 'Date');
   label(3, 'Shift Number');
   label(4, 'Location');
-  label(5, 'Mentor 1');
+  [5, 6, 7, 8, 9, 10, 11].forEach((r, i) => label(r, 'Mentor ' + (i + 1)));
   label(12, 'Female Parent');
   label(13, 'Parent 1 - Online is half of a shift');
   label(14, 'Parent 2 - Online is half of a shift');
@@ -59,6 +61,10 @@ function buildAttendanceTab(env) {
   });
   sh.set(34, 10, 'Partial'); // Ben already judged Partial for 10/4 shift 1
   sh.set(13, 11, 'Pat');     // Pat Parker signed up (first name only) for 10/4 shift 2
+  const MENTORS = ['Amanda', 'Dr. Akin', 'Liz', 'Venkat', 'Empty'];
+  for (let r = 5; r <= 11; r++) cols.forEach((_, i) => sh.setDropdown(r, 9 + i, MENTORS));
+  sh.set(5, 11, 'Venkat');
+  sh.set(6, 11, 'Empty');
   sh.set(12, 11, 'Robin Reyes');
 
   const map = env.app.SpreadsheetApp.getActive().insertSheet('student-parent-mapping');
@@ -81,7 +87,8 @@ function fresh(opts = {}) {
   env.app.setup();
   const roster = env.sheets['Check-in Roster'];
   const emails = { 'Ana Alvarez': 'ana@example.com', 'Ben Brooks': 'ben@example.com', 'Cara Chen': 'cara@example.com',
-    'Pat Parker': 'pat@example.com', 'Quinn Parker': 'quinn@example.com' };
+    'Pat Parker': 'pat@example.com', 'Quinn Parker': 'quinn@example.com',
+    'Venkat': 'venkat@example.com', 'Liz': 'liz@example.com' };
   for (let r = 2; r <= roster.getLastRow(); r++) roster.set(r, 2, emails[roster.get(r, 1)] || '');
   roster.getRange(roster.getLastRow() + 1, 1, 1, 2).setValues([['Ghost Person', 'ghost@example.com']]);
   env.roster = roster;
@@ -110,13 +117,17 @@ test('setup adds only the three check-in tabs and lists students on the roster',
     ['Pat Parker', 'Parent', 'P. Parker'],
     ['Quinn Parker', 'Parent', 'P. Parker'],
     ['Robin Reyes', 'Parent', ''],
+    ['Amanda', 'Mentor', ''],
+    ['Dr. Akin', 'Mentor', ''],
+    ['Liz', 'Mentor', ''],
+    ['Venkat', 'Mentor', ''],
     ['Ghost Person', undefined, undefined]
-  ], 'students, then parents (deduped across siblings) with family aliases');
+  ], 'students, parents (deduped, with family aliases), then mentors from the dropdown minus "Empty"');
   assert.ok(env.props.CODE_SECRET.length > 40);
   assert.equal(ok(env.call('me', 'tok-owner')).isAdmin, true);
 
   env.app.fillRosterNames(); // re-running adds no duplicates
-  assert.equal(env.sheets['Check-in Roster'].getLastRow(), 8);
+  assert.equal(env.sheets['Check-in Roster'].getLastRow(), 12);
 });
 
 test('shifts lists the day\'s columns, locations, and what is running now', () => {
@@ -424,6 +435,7 @@ test('an unlinked parent can claim their name and then check in', () => {
 
   const opts = ok(env.call('parentOptions', 'tok-robin'));
   assert.deepEqual(opts.parents, ['Robin Reyes']);
+  assert.deepEqual(opts.mentors, ['Amanda', 'Dr. Akin']);
   assert.deepEqual(opts.students, ['Ana Alvarez', 'Ben Brooks', 'Cara Chen']);
 
   const r = ok(env.call('registerParent', 'tok-robin', { name: 'robin  reyes', child: 'Cara Chen' }));
@@ -455,10 +467,49 @@ test('parent registration guards against abuse', () => {
   fail(env.call('parentOptions', 'tok-ana'), /already on the Check-in Roster/);
   fail(env.call('registerParent', 'tok-new', { name: 'Pat Parker', child: 'Ana Alvarez' }), /already linked/,
     'cannot take over a linked parent');
-  fail(env.call('registerParent', 'tok-new', { name: 'Ana Alvarez', child: 'Ben Brooks' }), /is a student/);
+  fail(env.call('registerParent', 'tok-new', { name: 'Ana Alvarez', child: 'Ben Brooks' }), /as a student, not a parent/);
   fail(env.call('registerParent', 'tok-new', { name: 'Dana Diaz', child: 'Nobody' }), /Pick your student/);
   fail(env.call('registerParent', 'tok-new', { name: 'Dana', child: 'Ben Brooks' }), /first and last name/);
   ok(env.call('registerParent', 'tok-new', { name: 'Dana Diaz', child: 'Ben Brooks' }));
   fail(env.call('registerParent', 'tok-new', { name: 'Dana Diaz', child: 'Ben Brooks' }), /already on the Check-in Roster/,
     'only once per account');
+});
+
+test('a mentor already in a Mentor slot is confirmed', () => {
+  const env = fresh({ now: new Date('2026-10-04T13:05:00Z') });
+  const r = ok(env.call('checkIn', 'tok-venkat', { code: codeAt(env, 'Hangar 391') }));
+  assert.deepEqual([r.role, r.status, r.alreadyMarked], ['mentor', 'Checked in', true]);
+  assert.equal(env.att.get(6, COL.oct4s2), 'Empty', 'nothing written');
+  assert.equal(logRows(env).at(-1)[4], 'Mentor checked in');
+});
+
+test('a mentor not signed up takes the first blank or "Empty" Mentor slot', () => {
+  const env = fresh({ now: new Date('2026-10-04T13:05:00Z') });
+  const r = ok(env.call('checkIn', 'tok-liz', { code: codeAt(env, 'Hangar 391') }));
+  assert.equal(r.alreadyMarked, false);
+  assert.equal(env.att.get(6, COL.oct4s2), 'Liz', '"Empty" counts as free');
+  assert.equal(env.att.get(5, COL.oct4s2), 'Venkat');
+  assert.equal(logRows(env).at(-1)[4], 'Mentor added');
+  for (const row of [12, 13, 14, 33, 34, 36]) {
+    assert.notEqual(env.att.get(row, COL.oct4s2), 'Liz', 'no parent or student rows touched');
+  }
+});
+
+test('full mentor slots give a clear error', () => {
+  const env = fresh({ now: new Date('2026-10-06T17:50:00Z') });
+  for (let row = 5; row <= 11; row++) env.att.set(row, COL.oct6, 'Amanda');
+  fail(env.call('checkIn', 'tok-liz', { code: codeAt(env, 'Hangar 391') }), /mentor slots .* are full/);
+});
+
+test('mentors can link their account to a name from the mentor list only', () => {
+  const env = fresh({ now: new Date('2026-10-04T13:05:00Z') });
+  env.tokens['tok-akin'] = { email: 'akin@example.com', emailVerified: true };
+  fail(env.call('registerMentor', 'tok-akin', { name: 'Random Person' }), /mentor list/);
+  fail(env.call('registerMentor', 'tok-akin', { name: 'Venkat' }), /already linked/);
+  fail(env.call('registerMentor', 'tok-ana', { name: 'Amanda' }), /already on the Check-in Roster/);
+  assert.deepEqual(ok(env.call('registerMentor', 'tok-akin', { name: 'dr. akin' })), { name: 'Dr. Akin', role: 'mentor' });
+  assert.equal(logRows(env).at(-1)[4], 'Mentor registered');
+  const r = ok(env.call('checkIn', 'tok-akin', { code: codeAt(env, 'Hangar 391') }));
+  assert.equal(r.role, 'mentor');
+  assert.equal(env.att.get(6, COL.oct4s2), 'Dr. Akin');
 });

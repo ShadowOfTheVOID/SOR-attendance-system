@@ -8,12 +8,13 @@
  * the display for a location (e.g. "Hangar 391" or "Online"). The time of
  * the check-in decides which of that location's shifts (columns) it counts
  * for; where shifts overlap, the next shift wins. Students get a status in
- * their row; parents are confirmed in, or added to, the shift's Parent slots.
+ * their row; parents and mentors are confirmed in, or added to, the shift's
+ * Parent / Mentor slots.
  *
  * Existing tabs are only read, except for single student cells in the
  * attendance tab. This script adds three tabs of its own:
  *   Check-in Settings   key/value configuration
- *   Check-in Roster     Name | Google email | Role (Student/Parent) | Also matches
+ *   Check-in Roster     Name | Google email | Role (Student/Parent/Mentor) | Also matches
  *   Check-in Log        every check-in, rejected code and admin edit
  */
 
@@ -33,7 +34,7 @@ var TAB = {
   LOG: 'Check-in Log'
 };
 var ROSTER_HEADERS = ['Name (students: exactly as in the attendance tab)', 'Google email',
-  'Role (Student / Parent)', 'Also matches (other spellings, comma-separated)'];
+  'Role (Student / Parent / Mentor)', 'Also matches (other spellings, comma-separated)'];
 var MAPPING_TAB = 'student-parent-mapping';
 var LOG_HEADERS = ['Timestamp', 'Shift date', 'Shift', 'Name', 'Status', 'Source', 'Note'];
 var SETTING = {
@@ -105,11 +106,31 @@ function fillRosterNames() {
   readMappingParents_().forEach(function (p) {
     if (isNew(p.name)) rows.push([p.name, '', 'Parent', p.aliases.join(', ')]);
   });
+  readMentorNames_().forEach(function (name) {
+    if (isNew(name)) rows.push([name, '', 'Mentor', '']);
+  });
   if (rows.length) {
     roster.getRange(roster.getLastRow() + 1, 1, rows.length, ROSTER_HEADERS.length).setValues(rows);
   }
   Logger.log(rows.length + ' name(s) added to "' + TAB.ROSTER +
     '". Fill in each person\'s Google email in column B.');
+}
+
+/** Mentor names from the dropdown used in the attendance tab's "Mentor N" rows. */
+function readMentorNames_() {
+  var sheet = getAttendanceSheet_();
+  var layout = readLayout_(sheet);
+  if (!layout.mentorRows.length) return [];
+  var rules = sheet.getRange(layout.mentorRows[0].row, 1, 1, sheet.getLastColumn())
+    .getDataValidations()[0];
+  for (var i = 0; i < rules.length; i++) {
+    var values = rules[i] && rules[i].getCriteriaValues();
+    if (values && Array.isArray(values[0])) {
+      return values[0].map(function (v) { return String(v).trim(); })
+        .filter(function (v) { return v && !AttendanceLogic.isEmptySlot(v); });
+    }
+  }
+  return [];
 }
 
 /** Parents ("First Last") from the student-parent-mapping tab, with that family's aliases. */
@@ -150,6 +171,7 @@ var ACTIONS = {
   saveShift: apiSaveShift_,
   parentOptions: apiParentOptions_,
   registerParent: apiRegisterParent_,
+  registerMentor: apiRegisterMentor_,
   listAdmins: apiListAdmins_,
   addAdmin: apiAddAdmin_,
   removeAdmin: apiRemoveAdmin_
@@ -224,8 +246,8 @@ function apiCheckIn_(user, req) {
       EARLY_CHECK_IN_MINUTES + ' minutes before a shift starts.');
   }
 
-  if (member.role === 'parent') {
-    return parentCheckIn_(sheet, layout, shift, member, user, now);
+  if (member.role === 'parent' || member.role === 'mentor') {
+    return volunteerCheckIn_(sheet, layout, shift, member, user, now);
   }
 
   var student = findStudent_(layout, member.name);
@@ -260,8 +282,34 @@ function apiParentOptions_(user) {
   return {
     parents: roster.filter(function (m) { return m.role === 'parent' && !m.email; })
       .map(function (m) { return m.name; }),
+    mentors: roster.filter(function (m) { return m.role === 'mentor' && !m.email; })
+      .map(function (m) { return m.name; }),
     students: readLayout_(getAttendanceSheet_()).students.map(function (st) { return st.name; })
   };
+}
+
+/**
+ * A mentor links their Google account to their name in the mentor dropdown.
+ * Only names already on the roster (imported from the dropdown) can be claimed.
+ */
+function apiRegisterMentor_(user, req) {
+  var name = String(req.name == null ? '' : req.name).trim();
+  return withLock_(function () {
+    var roster = getRoster_();
+    if (AttendanceLogic.findMemberByEmail(roster, user.email)) {
+      throw new Error('You are already on the Check-in Roster.');
+    }
+    var mentor = roster.filter(function (m) {
+      return m.role === 'mentor' && AttendanceLogic.sameName(m.name, name);
+    })[0];
+    if (!mentor) throw new Error('Pick your name from the mentor list.');
+    if (mentor.email) {
+      throw new Error('"' + mentor.name + '" is already linked to another account. Ask a lead.');
+    }
+    ss_().getSheetByName(TAB.ROSTER).getRange(mentor.sheetRow, 2).setValue(user.email);
+    appendLog_([[new Date(), todayKey_(), '', mentor.name, 'Mentor registered', 'Self', user.email]]);
+    return { name: mentor.name, role: 'mentor' };
+  });
 }
 
 /**
@@ -287,7 +335,9 @@ function apiRegisterParent_(user, req) {
     var existing = roster.filter(function (m) { return AttendanceLogic.sameName(m.name, name); })[0];
     var sheet = ss_().getSheetByName(TAB.ROSTER);
     if (existing) {
-      if (existing.role !== 'parent') throw new Error('"' + name + '" is a student, not a parent.');
+      if (existing.role !== 'parent') {
+        throw new Error('"' + name + '" is on the roster as a ' + existing.role + ', not a parent.');
+      }
       if (existing.email) {
         throw new Error('"' + existing.name + '" is already linked to another account. Ask a lead.');
       }
@@ -303,40 +353,48 @@ function apiRegisterParent_(user, req) {
   });
 }
 
+var VOLUNTEER = {
+  parent: { rows: 'parentRows', label: 'Parent', noun: 'parent' },
+  mentor: { rows: 'mentorRows', label: 'Mentor', noun: 'mentor' }
+};
+
 /**
- * A parent's check-in: if they already signed up in one of the shift's
- * parent slots it is confirmed; otherwise their full name goes into the
- * first empty "Parent N" slot (never "Female Parent", which leads assign).
+ * A parent's or mentor's check-in. If they already signed up in one of the
+ * shift's slots for their role it is confirmed; otherwise their roster name
+ * goes into the first free slot ("Parent N" / "Mentor N"; blank or "Empty").
+ * "Female Parent" is never auto-filled, since leads assign it.
  */
-function parentCheckIn_(sheet, layout, shift, member, user, now) {
-  if (!layout.parentRows.length) {
-    throw new Error('No "Parent" rows found in column A of "' + sheet.getName() + '".');
+function volunteerCheckIn_(sheet, layout, shift, member, user, now) {
+  var kind = VOLUNTEER[member.role];
+  var slots = layout[kind.rows];
+  if (!slots.length) {
+    throw new Error('No "' + kind.label + '" rows found in column A of "' + sheet.getName() + '".');
   }
-  var parents = getRoster_().filter(function (m) { return m.role === 'parent'; });
+  var group = getRoster_().filter(function (m) { return m.role === member.role; });
   return withLock_(function () {
-    var top = layout.parentRows[0].row;
-    var bottom = layout.parentRows[layout.parentRows.length - 1].row;
+    var top = slots[0].row;
+    var bottom = slots[slots.length - 1].row;
     var cells = sheet.getRange(top, shift.col, bottom - top + 1, 1).getValues()
       .map(function (r) { return r[0]; });
     var valueAt = function (row) { return cells[row - top]; };
 
-    var signedUp = layout.parentRows.some(function (p) {
-      return AttendanceLogic.parentSlotMatches(valueAt(p.row), member, parents);
+    var signedUp = slots.some(function (p) {
+      return AttendanceLogic.parentSlotMatches(valueAt(p.row), member, group);
     });
     if (!signedUp) {
-      var free = layout.parentRows.filter(function (p) {
-        return p.writable && !String(valueAt(p.row) == null ? '' : valueAt(p.row)).trim();
+      var free = slots.filter(function (p) {
+        return p.writable && AttendanceLogic.isEmptySlot(valueAt(p.row));
       })[0];
       if (!free) {
-        throw new Error('All parent slots for ' + shift.label + ' are full. Please tell a lead.');
+        throw new Error('All ' + kind.noun + ' slots for ' + shift.label + ' are full. Please tell a lead.');
       }
       sheet.getRange(free.row, shift.col).setValue(member.name);
     }
     appendLog_([[now, shift.date, shift.label, member.name,
-      signedUp ? 'Parent checked in' : 'Parent added', 'Self check-in', user.email]]);
+      kind.label + (signedUp ? ' checked in' : ' added'), 'Self check-in', user.email]]);
     return {
       name: member.name,
-      role: 'parent',
+      role: member.role,
       status: 'Checked in',
       alreadyMarked: signedUp,
       shift: shift.label
@@ -511,6 +569,7 @@ function readLayout_(sheet) {
     startRow: row(LABEL.START),
     endRow: row(LABEL.END),
     parentRows: [],
+    mentorRows: [],
     students: []
   };
   // "Female Parent", "Parent 1 - Online is half of a shift", "Parent 2", ...
@@ -518,6 +577,8 @@ function readLayout_(sheet) {
     var label = String(colA[p - 1] == null ? '' : colA[p - 1]).trim();
     if (/^(female\s+)?parent\b/i.test(label)) {
       layout.parentRows.push({ row: p, writable: /^parent\s*\d/i.test(label) });
+    } else if (/^mentor\b/i.test(label)) {
+      layout.mentorRows.push({ row: p, writable: true });
     }
   }
   for (var r = row(LABEL.STUDENTS_AFTER) + 1; r <= lastRow; r++) {
