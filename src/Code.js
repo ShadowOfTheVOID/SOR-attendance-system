@@ -7,12 +7,13 @@
  * ID token from Google sign-in. A check-in needs the rotating code shown on
  * the display for a location (e.g. "Hangar 391" or "Online"). The time of
  * the check-in decides which of that location's shifts (columns) it counts
- * for; where shifts overlap, the next shift wins.
+ * for; where shifts overlap, the next shift wins. Students get a status in
+ * their row; parents are confirmed in, or added to, the shift's Parent slots.
  *
  * Existing tabs are only read, except for single student cells in the
  * attendance tab. This script adds three tabs of its own:
  *   Check-in Settings   key/value configuration
- *   Check-in Roster     Name (as in column A) | Google email
+ *   Check-in Roster     Name | Google email | Role (Student/Parent) | Also matches
  *   Check-in Log        every check-in, rejected code and admin edit
  */
 
@@ -31,7 +32,9 @@ var TAB = {
   ROSTER: 'Check-in Roster',
   LOG: 'Check-in Log'
 };
-var ROSTER_HEADERS = ['Name (exactly as in the attendance tab)', 'Google email'];
+var ROSTER_HEADERS = ['Name (students: exactly as in the attendance tab)', 'Google email',
+  'Role (Student / Parent)', 'Also matches (other spellings, comma-separated)'];
+var MAPPING_TAB = 'student-parent-mapping';
 var LOG_HEADERS = ['Timestamp', 'Shift date', 'Shift', 'Name', 'Status', 'Source', 'Note'];
 var SETTING = {
   TAB: 'Attendance tab',
@@ -83,21 +86,57 @@ function setup() {
   fillRosterNames();
 }
 
-/** Appends every student in the attendance tab that is not yet on the Check-in Roster. */
+/**
+ * Appends every student in the attendance tab, and every parent in the
+ * student-parent-mapping tab, that is not yet on the Check-in Roster.
+ */
 function fillRosterNames() {
-  var ss = ss_();
-  var roster = getOrCreateSheet_(ss, TAB.ROSTER, ROSTER_HEADERS);
+  var roster = getOrCreateSheet_(ss_(), TAB.ROSTER, ROSTER_HEADERS);
   var known = getRoster_().map(function (m) { return m.name; });
-  var added = readLayout_(getAttendanceSheet_()).students
-    .filter(function (s) {
-      return !known.some(function (k) { return AttendanceLogic.sameName(k, s.name); });
-    })
-    .map(function (s) { return [s.name, '']; });
-  if (added.length) {
-    roster.getRange(roster.getLastRow() + 1, 1, added.length, 2).setValues(added);
+  var isNew = function (name) {
+    if (!name || known.some(function (k) { return AttendanceLogic.sameName(k, name); })) return false;
+    known.push(name);
+    return true;
+  };
+  var rows = [];
+  readLayout_(getAttendanceSheet_()).students.forEach(function (s) {
+    if (isNew(s.name)) rows.push([s.name, '', 'Student', '']);
+  });
+  readMappingParents_().forEach(function (p) {
+    if (isNew(p.name)) rows.push([p.name, '', 'Parent', p.aliases.join(', ')]);
+  });
+  if (rows.length) {
+    roster.getRange(roster.getLastRow() + 1, 1, rows.length, ROSTER_HEADERS.length).setValues(rows);
   }
-  Logger.log(added.length + ' name(s) added to "' + TAB.ROSTER +
-    '". Fill in each student\'s Google email in column B.');
+  Logger.log(rows.length + ' name(s) added to "' + TAB.ROSTER +
+    '". Fill in each person\'s Google email in column B.');
+}
+
+/** Parents ("First Last") from the student-parent-mapping tab, with that family's aliases. */
+function readMappingParents_() {
+  var sheet = ss_().getSheetByName(MAPPING_TAB);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  var width = Math.max(16, sheet.getLastColumn());
+  var header = sheet.getRange(1, 1, 1, width).getValues()[0].map(function (h) {
+    return String(h).trim().toLowerCase();
+  });
+  var col = function (label) { return header.indexOf(label.toLowerCase()); };
+  var parents = [];
+  sheet.getRange(2, 1, sheet.getLastRow() - 1, width).getValues().forEach(function (r) {
+    var aliases = [];
+    header.forEach(function (h, i) {
+      if (h.indexOf('parent aliases') === 0 && String(r[i]).trim()) aliases.push(String(r[i]).trim());
+    });
+    [1, 2].forEach(function (n) {
+      var first = col('Parent ' + n + ' first name');
+      var last = col('Parent ' + n + ' last name');
+      if (first === -1) return;
+      var name = [String(r[first]).trim(), last === -1 ? '' : String(r[last]).trim()]
+        .filter(Boolean).join(' ');
+      if (name) parents.push({ name: name, aliases: aliases });
+    });
+  });
+  return parents;
 }
 
 // ---------------------------------------------------------------- API
@@ -137,7 +176,7 @@ function apiMe_(user) {
     orgName: settings.orgName,
     today: todayKey_(),
     email: user.email,
-    member: member && { name: member.name },
+    member: member && { name: member.name, role: member.role },
     isAdmin: isAdmin_(user, settings),
     selfCheckIn: settings.selfCheckIn,
     statuses: AttendanceLogic.STATUSES
@@ -182,6 +221,10 @@ function apiCheckIn_(user, req) {
       EARLY_CHECK_IN_MINUTES + ' minutes before a shift starts.');
   }
 
+  if (member.role === 'parent') {
+    return parentCheckIn_(sheet, layout, shift, member, user, now);
+  }
+
   var student = findStudent_(layout, member.name);
   var incoming = AttendanceLogic.statusForCheckIn(nowMinutes_(), shift.start, settings.partialAfter);
   return withLock_(function () {
@@ -194,8 +237,50 @@ function apiCheckIn_(user, req) {
     }
     return {
       name: student.name,
+      role: 'student',
       status: result.status,
       alreadyMarked: !result.changed,
+      shift: shift.label
+    };
+  });
+}
+
+/**
+ * A parent's check-in: if they already signed up in one of the shift's
+ * parent slots it is confirmed; otherwise their full name goes into the
+ * first empty "Parent N" slot (never "Female Parent", which leads assign).
+ */
+function parentCheckIn_(sheet, layout, shift, member, user, now) {
+  if (!layout.parentRows.length) {
+    throw new Error('No "Parent" rows found in column A of "' + sheet.getName() + '".');
+  }
+  var parents = getRoster_().filter(function (m) { return m.role === 'parent'; });
+  return withLock_(function () {
+    var top = layout.parentRows[0].row;
+    var bottom = layout.parentRows[layout.parentRows.length - 1].row;
+    var cells = sheet.getRange(top, shift.col, bottom - top + 1, 1).getValues()
+      .map(function (r) { return r[0]; });
+    var valueAt = function (row) { return cells[row - top]; };
+
+    var signedUp = layout.parentRows.some(function (p) {
+      return AttendanceLogic.parentSlotMatches(valueAt(p.row), member, parents);
+    });
+    if (!signedUp) {
+      var free = layout.parentRows.filter(function (p) {
+        return p.writable && !String(valueAt(p.row) == null ? '' : valueAt(p.row)).trim();
+      })[0];
+      if (!free) {
+        throw new Error('All parent slots for ' + shift.label + ' are full. Please tell a lead.');
+      }
+      sheet.getRange(free.row, shift.col).setValue(member.name);
+    }
+    appendLog_([[now, shift.date, shift.label, member.name,
+      signedUp ? 'Parent checked in' : 'Parent added', 'Self check-in', user.email]]);
+    return {
+      name: member.name,
+      role: 'parent',
+      status: 'Checked in',
+      alreadyMarked: signedUp,
       shift: shift.label
     };
   });
@@ -367,8 +452,16 @@ function readLayout_(sheet) {
     locationRow: row(LABEL.LOCATION),
     startRow: row(LABEL.START),
     endRow: row(LABEL.END),
+    parentRows: [],
     students: []
   };
+  // "Female Parent", "Parent 1 - Online is half of a shift", "Parent 2", ...
+  for (var p = 1; p < layout.startRow; p++) {
+    var label = String(colA[p - 1] == null ? '' : colA[p - 1]).trim();
+    if (/^(female\s+)?parent\b/i.test(label)) {
+      layout.parentRows.push({ row: p, writable: /^parent\s*\d/i.test(label) });
+    }
+  }
   for (var r = row(LABEL.STUDENTS_AFTER) + 1; r <= lastRow; r++) {
     var name = String(colA[r - 1] == null ? '' : colA[r - 1]).trim();
     if (name) layout.students.push({ name: name, row: r });
@@ -468,9 +561,14 @@ function getSettings_() {
 function getRoster_() {
   var sheet = ss_().getSheetByName(TAB.ROSTER);
   if (!sheet || sheet.getLastRow() < 2) return [];
-  return sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues()
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, ROSTER_HEADERS.length).getValues()
     .map(function (r) {
-      return { name: String(r[0]).trim(), email: String(r[1]).trim().toLowerCase() };
+      return {
+        name: String(r[0]).trim(),
+        email: String(r[1]).trim().toLowerCase(),
+        role: AttendanceLogic.roleOf(r[2]),
+        aliases: String(r[3]).split(',').map(function (a) { return a.trim(); }).filter(Boolean)
+      };
     })
     .filter(function (m) { return m.name; });
 }

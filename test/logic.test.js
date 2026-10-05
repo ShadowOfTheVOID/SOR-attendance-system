@@ -114,3 +114,22 @@ test('validation and summarize', () => {
   assert.equal(c['Not Present'], 1);
   assert.equal(c.Partial, 1);
 });
+
+test('roleOf and parentSlotMatches', () => {
+  assert.equal(L.roleOf('Parent'), 'parent');
+  assert.equal(L.roleOf(' parent volunteer'), 'parent');
+  assert.equal(L.roleOf(''), 'student');
+  assert.equal(L.roleOf('Student'), 'student');
+
+  const simi = { name: 'Simi Raj', aliases: ['S. Raj'] };
+  const sam = { name: 'Samir Vapiwala', aliases: [] };
+  const sam2 = { name: 'Samir Gupta', aliases: [] };
+  const all = [simi, sam, sam2];
+  assert.ok(L.parentSlotMatches('Simi Raj ', simi, all));
+  assert.ok(L.parentSlotMatches('simi', simi, all), 'unique first name');
+  assert.ok(L.parentSlotMatches('S. Raj', simi, all), 'alias');
+  assert.ok(!L.parentSlotMatches('Samir', sam, all), 'ambiguous first name');
+  assert.ok(L.parentSlotMatches('samir vapiwala', sam, all));
+  assert.ok(!L.parentSlotMatches('', simi, all));
+  assert.ok(!L.parentSlotMatches('Simi Rajan', simi, all));
+});

@@ -10,6 +10,8 @@ const TOKENS = {
   'tok-stranger': { email: 'stranger@example.com', emailVerified: true },
   'tok-unverified': { email: 'ana@example.com', emailVerified: false },
   'tok-owner': { email: 'owner@example.com', emailVerified: true },
+  'tok-pat': { email: 'pat@example.com', emailVerified: true },     // parent, signed up as "Pat"
+  'tok-quinn': { email: 'quinn@example.com', emailVerified: true }, // parent, not signed up
   'tok-tedd': { email: 'NhsTedd@gmail.com', emailVerified: true }
 };
 
@@ -35,6 +37,10 @@ function buildAttendanceTab(env) {
   label(3, 'Shift Number');
   label(4, 'Location');
   label(5, 'Mentor 1');
+  label(12, 'Female Parent');
+  label(13, 'Parent 1 - Online is half of a shift');
+  label(14, 'Parent 2 - Online is half of a shift');
+  [15, 16, 17, 18].forEach((r, i) => label(r, 'Parent ' + (i + 3)));
   label(19, 'Start Time\nShould start 15 min. prior');
   label(20, 'End Time\nShould start 15 min. before');
   label(21, 'Notes / Meeting Objective(s)');
@@ -52,6 +58,20 @@ function buildAttendanceTab(env) {
     cols.forEach((_, i) => sh.set(r, 9 + i, 'Not Present'));
   });
   sh.set(34, 10, 'Partial'); // Ben already judged Partial for 10/4 shift 1
+  sh.set(13, 11, 'Pat');     // Pat Parker signed up (first name only) for 10/4 shift 2
+  sh.set(12, 11, 'Robin Reyes');
+
+  const map = env.app.SpreadsheetApp.getActive().insertSheet('student-parent-mapping');
+  map.getRange(1, 1, 1, 16).setValues([['Student Name (First Name)', 'Student Name (Last Name)',
+    'Parent 1 first name', 'Parent 1 last name', 'Parent 1 relation', 'Parent 1 role',
+    'Parent 2 first name', 'Parent 2 last name', 'Parent 2 relation', 'Parent 2 role',
+    'Parent aliases 1', 'Parent aliases 2', 'Parent aliases 3', 'Parent aliases 4',
+    'Parent aliases 5', 'Parent aliases 6']]);
+  map.getRange(2, 1, 3, 16).setValues([
+    ['Ana ', 'Alvarez', 'Pat', 'Parker ', 'Father', 'parent', 'Quinn', 'Parker', 'Mother', 'parent', 'P. Parker', '', '', '', '', ''],
+    ['Cara', 'Chen', 'Robin', 'Reyes', 'Mother', 'parent', '', '', '', '', '', '', '', '', '', ''],
+    ['Ana sibling', 'Alvarez', 'Pat', 'Parker', 'Father', 'parent', '', '', '', '', '', '', '', '', '', '']
+  ]);
   return sh;
 }
 
@@ -60,9 +80,11 @@ function fresh(opts = {}) {
   env.att = buildAttendanceTab(env);
   env.app.setup();
   const roster = env.sheets['Check-in Roster'];
-  const emails = { 'Ana Alvarez': 'ana@example.com', 'Ben Brooks': 'ben@example.com', 'Cara Chen': 'cara@example.com' };
+  const emails = { 'Ana Alvarez': 'ana@example.com', 'Ben Brooks': 'ben@example.com', 'Cara Chen': 'cara@example.com',
+    'Pat Parker': 'pat@example.com', 'Quinn Parker': 'quinn@example.com' };
   for (let r = 2; r <= roster.getLastRow(); r++) roster.set(r, 2, emails[roster.get(r, 1)] || '');
   roster.getRange(roster.getLastRow() + 1, 1, 1, 2).setValues([['Ghost Person', 'ghost@example.com']]);
+  env.roster = roster;
   return env;
 }
 
@@ -79,14 +101,22 @@ const logRows = (env) => env.sheets['Check-in Log'].cells.slice(1).filter(Boolea
 test('setup adds only the three check-in tabs and lists students on the roster', () => {
   const env = fresh();
   assert.deepEqual(Object.keys(env.sheets).sort(),
-    ['Check-in Log', 'Check-in Roster', 'Check-in Settings', 'Offseason 2026']);
-  const names = env.sheets['Check-in Roster'].cells.slice(1).map((r) => r[0]);
-  assert.deepEqual(names, ['Ana Alvarez', 'Ben Brooks', 'Cara Chen', 'Ghost Person']);
+    ['Check-in Log', 'Check-in Roster', 'Check-in Settings', 'Offseason 2026', 'student-parent-mapping']);
+  const rows = env.sheets['Check-in Roster'].cells.slice(1).map((r) => [r[0], r[2], r[3]]);
+  assert.deepEqual(rows, [
+    ['Ana Alvarez', 'Student', ''],
+    ['Ben Brooks', 'Student', ''],
+    ['Cara Chen', 'Student', ''],
+    ['Pat Parker', 'Parent', 'P. Parker'],
+    ['Quinn Parker', 'Parent', 'P. Parker'],
+    ['Robin Reyes', 'Parent', ''],
+    ['Ghost Person', undefined, undefined]
+  ], 'students, then parents (deduped across siblings) with family aliases');
   assert.ok(env.props.CODE_SECRET.length > 40);
   assert.equal(ok(env.call('me', 'tok-owner')).isAdmin, true);
 
   env.app.fillRosterNames(); // re-running adds no duplicates
-  assert.equal(env.sheets['Check-in Roster'].getLastRow(), 5);
+  assert.equal(env.sheets['Check-in Roster'].getLastRow(), 8);
 });
 
 test('shifts lists the day\'s columns, locations, and what is running now', () => {
@@ -236,7 +266,7 @@ test('auth: tokens are required, verified, and cached', () => {
   ok(env.call('me', 'tok-ana'));
   ok(env.call('me', 'tok-ana'));
   assert.equal(env.fetches.length, before + 1);
-  assert.deepEqual(ok(env.call('me', 'tok-ana')).member, { name: 'Ana Alvarez' });
+  assert.deepEqual(ok(env.call('me', 'tok-ana')).member, { name: 'Ana Alvarez', role: 'student' });
 });
 
 test('uses the built-in Firebase API key when no script property overrides it', () => {
@@ -337,4 +367,48 @@ test('adding an admin validates the email', () => {
   fail(env.call('addAdmin', 'tok-tedd', { email: 'not-an-email' }), /not a valid email/);
   fail(env.call('addAdmin', 'tok-tedd', { email: 'a@b.com, c@d.com' }), /not a valid email/);
   fail(env.call('addAdmin', 'tok-tedd', {}), /not a valid email/);
+});
+
+test('a parent who signed up is confirmed without changing the sheet', () => {
+  const env = fresh({ now: new Date('2026-10-04T13:05:00Z') }); // 10/4 shift 2
+  const r = ok(env.call('checkIn', 'tok-pat', { code: codeAt(env, 'Hangar 391') }));
+  assert.deepEqual([r.role, r.status, r.alreadyMarked], ['parent', 'Checked in', true]);
+  assert.match(r.shift, /Shift 2/);
+  assert.equal(env.att.get(13, COL.oct4s2), 'Pat', 'their own sign-up text is left as is');
+  assert.equal(env.att.get(14, COL.oct4s2), '');
+  assert.deepEqual(logRows(env).at(-1).slice(3, 5), ['Pat Parker', 'Parent checked in']);
+  assert.deepEqual(ok(env.call('me', 'tok-pat')).member, { name: 'Pat Parker', role: 'parent' });
+});
+
+test('a parent who did not sign up is added to the first empty Parent slot', () => {
+  const env = fresh({ now: new Date('2026-10-04T13:05:00Z') });
+  const r = ok(env.call('checkIn', 'tok-quinn', { code: codeAt(env, 'Hangar 391') }));
+  assert.equal(r.alreadyMarked, false);
+  assert.equal(env.att.get(14, COL.oct4s2), 'Quinn Parker', 'Parent 2 (Parent 1 was taken)');
+  assert.equal(env.att.get(12, COL.oct4s2), 'Robin Reyes', 'Female Parent untouched');
+  assert.equal(logRows(env).at(-1)[4], 'Parent added');
+
+  // Checking in again finds the name it wrote.
+  assert.equal(ok(env.call('checkIn', 'tok-quinn', { code: codeAt(env, 'Hangar 391') })).alreadyMarked, true);
+  assert.equal(env.att.get(15, COL.oct4s2), '');
+});
+
+test('a parent check-in never touches student rows and is never Partial', () => {
+  const env = fresh({ now: new Date('2026-10-04T15:30:00Z') }); // 2.5h into shift 2
+  const r = ok(env.call('checkIn', 'tok-quinn', { code: codeAt(env, 'Hangar 391') }));
+  assert.equal(r.status, 'Checked in');
+  for (const row of [33, 34, 36]) assert.equal(env.att.get(row, COL.oct4s2), 'Not Present');
+});
+
+test('a parent alias on the roster matches a sign-up', () => {
+  const env = fresh({ now: new Date('2026-10-06T17:50:00Z') });
+  env.att.set(15, COL.oct6, 'p. parker');
+  const r = ok(env.call('checkIn', 'tok-quinn', { code: codeAt(env, 'Hangar 391') }));
+  assert.equal(r.alreadyMarked, true, 'family alias "P. Parker" from the mapping tab');
+});
+
+test('full parent slots give a clear error', () => {
+  const env = fresh({ now: new Date('2026-10-06T17:50:00Z') });
+  [13, 14, 15, 16, 17, 18].forEach((row) => env.att.set(row, COL.oct6, 'Someone ' + row));
+  fail(env.call('checkIn', 'tok-quinn', { code: codeAt(env, 'Hangar 391') }), /parent slots .* are full/);
 });

@@ -44,7 +44,11 @@
     setMsg($('msg'), 'ok', 'Checking in…');
     try {
       const r = await api('checkIn', { code: $('code').value });
-      if (r.alreadyMarked) setMsg($('msg'), 'warn', `You're already marked ${r.status} for ${r.shift}.`);
+      if (r.role === 'parent') {
+        setMsg($('msg'), 'ok', r.alreadyMarked
+          ? `✓ Thanks, ${r.name}! You're checked in for ${r.shift}.`
+          : `✓ Thanks, ${r.name}! You weren't signed up, so you've been added as a parent volunteer for ${r.shift}.`);
+      } else if (r.alreadyMarked) setMsg($('msg'), 'warn', `You're already marked ${r.status} for ${r.shift}.`);
       else if (r.status === 'Partial') setMsg($('msg'), 'warn', `${r.name}: marked Partial (late) for ${r.shift}`);
       else setMsg($('msg'), 'ok', `✓ ${r.name}: ${r.status} for ${r.shift}`);
       $('code').value = '';
@@ -71,7 +75,8 @@
         $('checkin-form').classList.add('hidden');
         return;
       }
-      $('member-line').innerHTML = `Hi <b>${esc(me.member.name)}</b>`;
+      $('member-line').innerHTML = `Hi <b>${esc(me.member.name)}</b>` +
+        (me.member.role === 'parent' ? ' (parent volunteer)' : '');
       if (!me.selfCheckIn) {
         $('checkin-btn').disabled = true;
         setMsg($('msg'), 'warn', 'Check-in is currently closed.');

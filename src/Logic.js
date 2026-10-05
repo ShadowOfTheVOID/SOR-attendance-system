@@ -157,6 +157,30 @@ var AttendanceLogic = (function () {
     return nowMin > shiftStartMin + partialAfterMin ? 'Partial' : 'Present';
   }
 
+  /** "parent" when a roster Role cell starts with "parent", otherwise "student". */
+  function roleOf(roleCell) {
+    return normalize(roleCell).indexOf('parent') === 0 ? 'parent' : 'student';
+  }
+
+  function firstName(name) {
+    return normalize(name).split(' ')[0] || '';
+  }
+
+  /**
+   * Whether a parent-slot cell (typed by hand when signing up) refers to this
+   * parent: full name, one of their aliases, or just their first name when no
+   * other parent on the roster shares it.
+   */
+  function parentSlotMatches(slotText, parent, allParents) {
+    var t = normalize(slotText);
+    if (!t) return false;
+    if (t === normalize(parent.name)) return true;
+    if ((parent.aliases || []).some(function (a) { return normalize(a) === t; })) return true;
+    var first = firstName(parent.name);
+    if (t !== first) return false;
+    return allParents.filter(function (p) { return firstName(p.name) === first; }).length === 1;
+  }
+
   /** What a check-in with status `incoming` does to the student's existing cell. */
   function mergeCheckIn(existing, incoming) {
     var current = String(existing == null ? '' : existing).trim();
@@ -225,6 +249,8 @@ var AttendanceLogic = (function () {
     findMemberByEmail: findMemberByEmail,
     sameName: sameName,
     statusForCheckIn: statusForCheckIn,
+    roleOf: roleOf,
+    parentSlotMatches: parentSlotMatches,
     mergeCheckIn: mergeCheckIn,
     parseMinutes: parseMinutes,
     timeStep: timeStep,
