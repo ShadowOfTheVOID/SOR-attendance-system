@@ -134,6 +134,29 @@ var AttendanceLogic = (function () {
     return -1;
   }
 
+  function lastName(name) {
+    var parts = normalize(name).split(' ');
+    return parts.length > 1 ? parts[parts.length - 1] : '';
+  }
+
+  /**
+   * The roster entry a registration-form person refers to, or null. The
+   * attendance tab uses preferred names ("Katya") while the form has legal
+   * ones ("Katherine"), so after exact/alias/first+last matches it falls
+   * back to the last name, but only when exactly one entry and exactly one
+   * form person have it.
+   */
+  function matchFormPerson(formName, entries, formPeople) {
+    var direct = entries.filter(function (e) { return formNameMatches(formName, e); });
+    if (direct.length) return direct[0];
+    var last = lastName(formName);
+    if (!last) return null;
+    var sameLast = function (n) { return lastName(n) === last; };
+    var onForm = formPeople.filter(function (p) { return sameLast(p.name); });
+    var onRoster = entries.filter(function (e) { return sameLast(e.name); });
+    return onForm.length === 1 && onRoster.length === 1 ? onRoster[0] : null;
+  }
+
   /** Finds a roster entry by Google account email (case-insensitive). */
   function findMemberByEmail(roster, email) {
     var e = normalize(email);
@@ -310,6 +333,7 @@ var AttendanceLogic = (function () {
     findMemberByEmail: findMemberByEmail,
     sameName: sameName,
     formNameMatches: formNameMatches,
+    matchFormPerson: matchFormPerson,
     statusForCheckIn: statusForCheckIn,
     roleOf: roleOf,
     maskEmail: maskEmail,

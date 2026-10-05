@@ -167,3 +167,13 @@ test('formNameMatches: exact, alias, or same first and last word', () => {
   assert.ok(!L.formNameMatches('Shravani Kumar', { name: 'Shravani Lad' }));
   assert.ok(!L.formNameMatches('Lad', { name: 'Shravani Lad' }));
 });
+
+test('matchFormPerson falls back to a unique last name for preferred first names', () => {
+  const roster = [{ name: 'Katya Zadorognuk' }, { name: 'Shravani Lad' }, { name: 'Ana Patel' }, { name: 'Ravi Patel' }];
+  const form = [{ name: 'Katherine Zadorognuk' }, { name: 'Shravani Swapnil Lad' }, { name: 'Anita Patel' }, { name: 'Ravi Patel' }];
+  assert.equal(L.matchFormPerson('Katherine Zadorognuk', roster, form).name, 'Katya Zadorognuk');
+  assert.equal(L.matchFormPerson('Shravani Swapnil Lad', roster, form).name, 'Shravani Lad');
+  assert.equal(L.matchFormPerson('Ravi Patel', roster, form).name, 'Ravi Patel');
+  assert.equal(L.matchFormPerson('Anita Patel', roster, form), null, 'two Patels: too ambiguous to guess');
+  assert.equal(L.matchFormPerson('Nobody Else', roster, form), null);
+});

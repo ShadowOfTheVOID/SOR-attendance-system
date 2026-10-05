@@ -282,10 +282,9 @@ function autoLink_(user) {
       return entry;
     };
     if (asStudent) {
-      var st = roster.filter(function (m) {
-        return m.role === 'student' && !m.email && AttendanceLogic.formNameMatches(asStudent.name, m);
-      })[0];
-      if (st) return link(st, 'Student linked');
+      var students = roster.filter(function (m) { return m.role === 'student'; });
+      var st = AttendanceLogic.matchFormPerson(asStudent.name, students, dir.students);
+      if (st && !st.email) return link(st, 'Student linked');
     }
     if (asParent) {
       var named = roster.filter(function (m) { return AttendanceLogic.sameName(m.name, asParent.name); })[0];
@@ -325,9 +324,15 @@ function readDirectory_() {
   return dir;
 }
 
-/** The form email on file for this roster entry, if they must sign in with it. */
-function protectedEmailFor_(entry, list) {
-  var hit = list.filter(function (d) { return AttendanceLogic.formNameMatches(d.name, entry); })[0];
+/**
+ * The form email on file for this roster entry, if they must sign in with
+ * it. entries: everyone with the same role, for the preferred-name match.
+ */
+function protectedEmailFor_(entry, list, entries) {
+  var hit = list.filter(function (d) {
+    return AttendanceLogic.matchFormPerson(d.name, entries || [entry], list) === entry ||
+      AttendanceLogic.formNameMatches(d.name, entry);
+  })[0];
   return hit ? hit.email : null;
 }
 
@@ -341,8 +346,9 @@ function apiJoinOptions_(user) {
   var roster = getRoster_();
   var dir = readDirectory_();
   var unclaimed = function (role, list) {
-    return roster.filter(function (m) {
-      return m.role === role && !m.email && !protectedEmailFor_(m, list);
+    var group = roster.filter(function (m) { return m.role === role; });
+    return group.filter(function (m) {
+      return !m.email && !protectedEmailFor_(m, list, group);
     }).map(function (m) { return m.name; });
   };
   return {
@@ -364,7 +370,8 @@ function apiRegisterStudent_(user, req) {
       return m.role === 'student' && AttendanceLogic.sameName(m.name, name);
     })[0];
     if (!st) throw new Error('Pick your name from the list.');
-    var onFile = protectedEmailFor_(st, readDirectory_().students);
+    var onFile = protectedEmailFor_(st, readDirectory_().students,
+      roster.filter(function (m) { return m.role === 'student'; }));
     if (onFile) {
       throw new Error('Sign in with the email on your registration form (' +
         AttendanceLogic.maskEmail(onFile) + ').');

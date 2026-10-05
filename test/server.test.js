@@ -476,10 +476,10 @@ test('parent registration guards against abuse', () => {
     'only once per account');
 });
 
-// Registration form: Ana (+ parent Pat) and "Benjamin" Brooks (+ new parent Lee Brooks) filled it in; Cara didn't.
+// Registration form: Ana (+ parent Pat) and Ben, misspelled "Benjamin Brookes" (+ new parent Lee Brooks), filled it in; Cara didn't.
 const FORM = [
   ['t', 'Ana', 'Alvarez', 'Ana@Example.com', 'Pat', 'Parker', 'pat@example.com', '', '', ''],
-  ['t', 'Benjamin', 'Brooks', 'ben@example.com', 'Lee', 'Brooks', 'lee@example.com', 'Robin', 'Reyes', 'robin.form@example.com']
+  ['t', 'Benjamin', 'Brookes', 'ben@example.com', 'Lee', 'Brooks', 'lee@example.com', 'Robin', 'Reyes', 'robin.form@example.com']
 ];
 const formEnv = (now) => {
   const env = fresh({ form: FORM, emails: false, now: new Date(now || '2026-10-04T13:05:00Z') });
@@ -515,15 +515,15 @@ test('parents are linked automatically, and added to the roster if missing', () 
   const lee = ok(env.call('me', 'tok-lee')).member;
   assert.deepEqual(lee, { name: 'Lee Brooks', role: 'parent' });
   assert.deepEqual(env.roster.cells.at(-1).slice(0, 3), ['Lee Brooks', 'lee@example.com', 'Parent']);
-  assert.match(logRows(env).at(-1)[6], /parent of Benjamin Brooks/);
+  assert.match(logRows(env).at(-1)[6], /parent of Benjamin Brookes/);
   const r = ok(env.call('checkIn', 'tok-lee', { code: codeAt(env, 'Hangar 391') }));
   assert.equal(env.att.get(14, COL.oct4s2), 'Lee Brooks');
   assert.equal(r.role, 'parent');
 });
 
-test('a nickname mismatch falls back to picking your name', () => {
+test('a name that cannot be matched falls back to picking your name', () => {
   const env = formEnv();
-  // The form says "Benjamin Brooks", the attendance tab says "Ben Brooks".
+  // The form says "Benjamin Brookes" (misspelled), the attendance tab says "Ben Brooks".
   const me = ok(env.call('me', 'tok-ben'));
   assert.equal(me.member, null);
   assert.equal(me.canJoin, true);
@@ -557,13 +557,29 @@ test('without the registration form sheet, linking falls back to self-claim', ()
 test('form names with a middle name, or listed under Also matches, link automatically', () => {
   const form = [
     ['t', 'Cara Mei', 'Chen', 'cara@example.com', '', '', '', '', '', ''],
-    ['t', 'Benjamin', 'Brooks', 'ben@example.com', '', '', '', '', '', '']
+    ['t', 'Benjamin', 'Brookes', 'ben@example.com', '', '', '', '', '', '']
   ];
   const env = fresh({ form, emails: false });
   assert.deepEqual(ok(env.call('me', 'tok-cara')).member, { name: 'Cara Chen', role: 'student' }, 'middle name ignored');
 
-  assert.equal(ok(env.call('me', 'tok-ben')).member, null, 'nickname needs an alias');
+  assert.equal(ok(env.call('me', 'tok-ben')).member, null, 'misspelled last name needs an alias');
   const row = env.roster.cells.findIndex((x) => x && x[0] === 'Ben Brooks') + 1;
-  env.roster.set(row, 4, 'Benjamin Brooks');
+  env.roster.set(row, 4, 'Benjamin Brookes');
   assert.deepEqual(ok(env.call('me', 'tok-ben')).member, { name: 'Ben Brooks', role: 'student' });
+});
+
+test('preferred first names link by unique last name (Katya on the sheet, Katherine on the form)', () => {
+  const form = [['t', 'Catherine', 'Chen', 'cara@example.com', '', '', '', '', '', '']];
+  const env = fresh({ form, emails: false });
+  assert.deepEqual(ok(env.call('me', 'tok-cara')).member, { name: 'Cara Chen', role: 'student' });
+  env.tokens['tok-x'] = { email: 'x@example.com', emailVerified: true };
+  assert.ok(!ok(env.call('joinOptions', 'tok-x')).students.includes('Cara Chen'), 'linked, so not claimable');
+});
+
+test('a preferred-name match also protects the name from being claimed', () => {
+  const form = [['t', 'Catherine', 'Chen', 'cara.form@example.com', '', '', '', '', '', '']];
+  const env = fresh({ form, emails: false });
+  env.tokens['tok-x'] = { email: 'x@example.com', emailVerified: true };
+  assert.ok(!ok(env.call('joinOptions', 'tok-x')).students.includes('Cara Chen'));
+  fail(env.call('registerStudent', 'tok-x', { name: 'Cara Chen' }), /ca\*\*\*@example.com/);
 });

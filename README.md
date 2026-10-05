@@ -123,10 +123,12 @@ You need edit access to the attendance spreadsheet, and Node.js
      ("2026-2027 SOR Student Information & Roster", tab *RAW DATA*). A
      student's *Student Email* links them to their attendance row. A
      *Parent/Guardian* email links them as that parent, and adds them to the
-     roster if they're missing. A middle name on the form doesn't matter
-     ("Shravani Swapnil Lad" matches "Shravani Lad"). For a nickname, type
-     the form's name in the roster's **Also matches** column (e.g.
-     `Katherine Zadorognuk` on Katya's row).
+     roster if they're missing. The attendance tab's **preferred names** are
+     what the app shows and writes. They still match the form's legal names:
+     a middle name doesn't matter ("Shravani Swapnil Lad" → "Shravani Lad"),
+     and a different first name matches when the last name is unique on both
+     sheets ("Katherine Zadorognuk" → "Katya Zadorognuk"). For anything else,
+     type the form's name in the roster's **Also matches** column.
    - **Otherwise,** the page asks *"Who are you?"*. Students pick their name;
      parents pick or type theirs and pick their student. A name whose email
      *is* on the form can't be claimed by another account; the page shows a
