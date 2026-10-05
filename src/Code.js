@@ -290,10 +290,14 @@ function autoLink_(user) {
       var named = roster.filter(function (m) { return AttendanceLogic.sameName(m.name, asParent.name); })[0];
       if (named && named.role === 'parent' && !named.email) return link(named, 'Parent linked');
       if (!named) {
+        // Show the child by their attendance-tab name, not the form's legal name.
+        var kid = AttendanceLogic.matchFormPerson(asParent.child,
+          roster.filter(function (m) { return m.role === 'student'; }), dir.students);
         sheet.getRange(sheet.getLastRow() + 1, 1, 1, ROSTER_HEADERS.length)
           .setValues([[asParent.name, user.email, 'Parent', '']]);
         appendLog_([[new Date(), todayKey_(), '', asParent.name, 'Parent linked', 'Auto',
-          user.email + ', parent of ' + asParent.child + ' (from the registration form)']]);
+          user.email + ', parent of ' + (kid ? kid.name : asParent.child) +
+          ' (from the registration form)']]);
         return { name: asParent.name, email: user.email, role: 'parent', aliases: [] };
       }
     }

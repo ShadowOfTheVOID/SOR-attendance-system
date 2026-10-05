@@ -583,3 +583,15 @@ test('a preferred-name match also protects the name from being claimed', () => {
   assert.ok(!ok(env.call('joinOptions', 'tok-x')).students.includes('Cara Chen'));
   fail(env.call('registerStudent', 'tok-x', { name: 'Cara Chen' }), /ca\*\*\*@example.com/);
 });
+
+test('everything shown uses the attendance-tab name, never the form\'s legal name', () => {
+  const form = [['t', 'Catherine', 'Chen', 'cara@example.com', 'Lee', 'Chen', 'lee@example.com', '', '', '']];
+  const env = fresh({ form, emails: false, now: new Date('2026-10-04T13:05:00Z') });
+  env.tokens['tok-lee'] = { email: 'lee@example.com', emailVerified: true };
+  assert.equal(ok(env.call('me', 'tok-cara')).member.name, 'Cara Chen');
+  const r = ok(env.call('checkIn', 'tok-cara', { code: codeAt(env, 'Hangar 391') }));
+  assert.equal(r.name, 'Cara Chen');
+  ok(env.call('me', 'tok-lee'));
+  assert.match(logRows(env).at(-1)[6], /parent of Cara Chen /);
+  assert.ok(!JSON.stringify(logRows(env)).includes('Catherine'), 'legal name never written');
+});
