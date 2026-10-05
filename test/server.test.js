@@ -288,6 +288,17 @@ test('uses the built-in Firebase API key when no script property overrides it', 
   assert.match(env.fetches[0], new RegExp('key=' + builtIn));
 });
 
+test('a SPREADSHEET_ID script property points it at a test copy instead', () => {
+  const env = load({ tokens: TOKENS });
+  env.props.SPREADSHEET_ID = 'test-copy-id';
+  const copy = env.addSpreadsheet('test-copy-id');
+  env.att = buildAttendanceTab({ app: { SpreadsheetApp: { getActive: () => copy } } });
+  env.app.setup();
+  assert.ok(copy.getSheetByName('Check-in Roster'), 'tabs created in the copy');
+  assert.equal(env.sheets['Check-in Roster'], undefined, 'real sheet untouched');
+  assert.ok(!env.openedIds.includes('1cNJ4zwLjHkr8MOZk4QYvyJmILBFWjarDGFOgwaHgiJA'));
+});
+
 test('opens the team spreadsheet by ID (standalone script)', () => {
   const env = fresh();
   ok(env.call('me', 'tok-ana'));
