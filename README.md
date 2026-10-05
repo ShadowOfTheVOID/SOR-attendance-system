@@ -94,21 +94,6 @@ You need edit access to the attendance spreadsheet, and Node.js
 > script runs as whoever sets it up. If that's a personal account and it loses
 > access to the sheet later, check-in stops working.
 
-### Step 0: Test on a copy first
-
-Until you're ready to go live, keep the script off the real sheet:
-
-1. Open *SOR Signups/Attendance '26-'27* and click **File → Make a copy**.
-   Name it e.g. "Attendance TEST".
-2. Copy the copy's ID from its URL (the long part between `/d/` and `/edit`).
-3. In the SOR Check-in Apps Script project: **⚙ Project Settings → Script
-   properties → Add script property**, with Property `SPREADSHEET_ID` and
-   Value = the copy's ID. Save.
-
-Everything (setup, check-ins, admin edits) now goes to the copy. **To go
-live:** delete that script property, run `setup` once, and deploy a new
-version.
-
 ### Step 1: Create a separate Apps Script project
 
 > **Don't put this code in the spreadsheet's existing script.**

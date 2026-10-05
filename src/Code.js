@@ -18,8 +18,6 @@
  */
 
 // The team's "SOR Signups/Attendance '26-'27" spreadsheet (the ID in its URL).
-// To test on a copy first, set a script property SPREADSHEET_ID to the copy's
-// ID (Project Settings → Script properties); remove it to go live.
 var SPREADSHEET_ID = '1cNJ4zwLjHkr8MOZk4QYvyJmILBFWjarDGFOgwaHgiJA';
 // "2026-2027 SOR Student Information & Roster" (registration form responses).
 // People are linked automatically by the email they gave on the form.
@@ -895,10 +893,7 @@ var ss_cache_ = null;
 
 /** The attendance spreadsheet. */
 function ss_() {
-  if (!ss_cache_) {
-    var id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID') || SPREADSHEET_ID;
-    ss_cache_ = SpreadsheetApp.openById(id);
-  }
+  if (!ss_cache_) ss_cache_ = SpreadsheetApp.openById(SPREADSHEET_ID);
   return ss_cache_;
 }
 
