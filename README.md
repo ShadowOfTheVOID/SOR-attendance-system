@@ -51,20 +51,11 @@ rules:
 - Parents are never marked `Partial`, and a parent check-in never touches
   student rows.
 
-**Mentors** work the same way, using the `Mentor 1`–`Mentor 7` rows:
-
-- **Already in a Mentor slot:** confirmed and logged.
-- **Not signed up:** their name goes into the first Mentor slot that is blank
-  or `Empty`.
-- **Names come from the sheet's mentor dropdown** (Amanda, Dr. Akin, …), so
-  the sheet only ever gets valid dropdown values. To add a new mentor, add
-  them to that dropdown, then re-run `fillRosterNames`.
-
 It adds three small tabs of its own:
 
 | Tab | Contents |
 |---|---|
-| **Check-in Roster** | Name, Google email, Role (`Student`/`Parent`/`Mentor`), and other spellings. Setup fills in students from the attendance tab, parents (with aliases) from `student-parent-mapping`, and mentors from the mentor dropdown. |
+| **Check-in Roster** | Name, Google email, Role (`Student`/`Parent`), and other spellings. Setup fills in students from the attendance tab and parents (with aliases) from `student-parent-mapping`; you add the emails. |
 | **Check-in Log** | Every check-in, **rejected code**, and admin edit, with time and email. |
 | **Check-in Settings** | Attendance tab name, check-in on/off, admin emails, org name. |
 
@@ -72,7 +63,7 @@ It adds three small tabs of its own:
 
 | Page | Who | What |
 |---|---|---|
-| `/` | Students, parents & mentors | Sign in with Google, then scan the QR code or type the 6-digit code. |
+| `/` | Students & parents | Sign in with Google, then scan the QR code or type the 6-digit code. |
 | `/display.html` | Admins | Put it on a projector or tablet. It shows the live code, a countdown, the QR code and which shift check-ins are going to right now. If a day has more than one location (e.g. Hangar 391 + Online), pick the location; for **Online**, screen-share it on Zoom. |
 | `/admin.html` | Admins | Pick a date and shift, then set any student's status from the sheet's own dropdown values. Each change is logged. The **Admins** section adds or removes admins by email. |
 
@@ -129,14 +120,11 @@ You need edit access to the attendance spreadsheet, and Node.js
 7. In **Check-in Roster**, fill column B with each **student's** Google email.
    You can copy them from "2026-2027 SOR Student Information & Roster". Each
    one must be the account they'll sign in with.
-   **Parents and mentors link themselves.** The first time someone who isn't
-   on the roster signs in, the page asks *"Parent or mentor?"*:
-   - **Parents** pick their name (or type it if it's missing) and their
-     student.
-   - **Mentors** pick their name from the mentor dropdown list.
-
-   Their email is then saved to the roster. Each registration is logged in
-   Check-in Log as `Parent registered` / `Mentor registered`. A wrong one is fixed by clearing that roster row's
+   **Parents can link themselves.** The first time a parent signs in, the page
+   asks *"Are you a parent volunteer?"*. They pick their name (or type it if
+   it's missing) and their student, and their email is saved to the roster.
+   Each registration is logged in Check-in Log as `Parent registered`, with
+   the email and child. A wrong one is fixed by clearing that roster row's
    email, or deleting the row. Parents without a Google account can't use the
    app, so keep signing them in by hand.
 8. In **Check-in Settings**:
@@ -234,7 +222,7 @@ It prints your site address, for example `https://sor-attendance.web.app`.
 | *Server error* / *Failed to fetch* | Check `scriptUrl` ends in `/exec`, and that the deployment's access is **Anyone**. |
 | *… is not on the Check-in Roster* | Add the email in column B of Check-in Roster. It must be the Google account they signed in with. |
 | *… is not a row in the attendance tab* | The name on Check-in Roster must match column A of the attendance tab (case and extra spaces don't matter). |
-| *All parent/mentor slots for … are full* | Parent 1–6 / Mentor 1–7 are all taken for that shift. A lead adds them by hand. |
+| *All parent slots for … are full* | Parent 1–6 are all taken for that shift. A lead adds them by hand (e.g. in a spare row or a note). |
 | *There is no shift today* / wrong shifts listed | Check the `Date` row for today's column, and that *Attendance tab* in Check-in Settings is right. |
 | *Could not find a "… " row in column A* | The attendance tab is missing one of the labels listed under Day-to-day. |
 | *auth/unauthorized-domain* | If you use a custom domain, add it under Firebase **Authentication → Settings → Authorized domains**. |

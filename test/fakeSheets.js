@@ -28,15 +28,6 @@ class FakeRange {
       return String(v ?? '');
     }));
   }
-  getDataValidations() {
-    const out = [];
-    for (let r = 0; r < this.nr; r++) {
-      const line = [];
-      for (let c = 0; c < this.nc; c++) line.push(this.sheet.validations[`${this.row + r},${this.col + c}`] || null);
-      out.push(line);
-    }
-    return out;
-  }
   getValue() { return this.sheet.get(this.row, this.col); }
   setValue(x) { this.sheet.set(this.row, this.col, x); return this; }
   setNumberFormat() { return this; }
@@ -46,13 +37,7 @@ class FakeRange {
 }
 
 class FakeSheet {
-  constructor(name) {
-    this.name = name; this.cells = []; this.maxRows = 1000; this.maxCols = 26; this.validations = {};
-  }
-  /** Test helper: a dropdown (value-in-list) rule on one cell. */
-  setDropdown(r, c, list) {
-    this.validations[`${r},${c}`] = { getCriteriaValues: () => [list, true] };
-  }
+  constructor(name) { this.name = name; this.cells = []; this.maxRows = 1000; this.maxCols = 26; }
   get(r, c) { return (this.cells[r - 1] || [])[c - 1] ?? ''; }
   set(r, c, x) {
     if (r > this.maxRows || c > this.maxCols) throw new Error(`out of bounds R${r}C${c}`);

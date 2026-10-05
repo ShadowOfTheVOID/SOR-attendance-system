@@ -120,11 +120,6 @@ test('roleOf and parentSlotMatches', () => {
   assert.equal(L.roleOf(' parent volunteer'), 'parent');
   assert.equal(L.roleOf(''), 'student');
   assert.equal(L.roleOf('Student'), 'student');
-  assert.equal(L.roleOf('Mentor'), 'mentor');
-  assert.ok(L.isEmptySlot(''));
-  assert.ok(L.isEmptySlot(' Empty '));
-  assert.ok(L.isEmptySlot(null));
-  assert.ok(!L.isEmptySlot('Venkat'));
 
   const simi = { name: 'Simi Raj', aliases: ['S. Raj'] };
   const sam = { name: 'Samir Vapiwala', aliases: [] };

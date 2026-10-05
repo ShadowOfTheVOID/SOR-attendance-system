@@ -25,24 +25,16 @@
   </section>
 
   <section class="card hidden" id="parent-card">
-    <h2 style="margin-top:0;font-size:1.15rem">Parent or mentor?</h2>
+    <h2 style="margin-top:0;font-size:1.15rem">Are you a parent volunteer?</h2>
     <p class="who">Link this Google account once, then check in with the code like everyone else.
       Students: ask a lead to add your email instead.</p>
     <form id="parent-form">
-      <div class="row" role="radiogroup" style="margin-bottom:12px">
-        <label class="choice"><input type="radio" name="vrole" value="parent" checked> I'm a parent</label>
-        <label class="choice"><input type="radio" name="vrole" value="mentor"> I'm a mentor</label>
-      </div>
       <label for="parent-name">Your name</label>
       <select id="parent-name"></select>
       <input id="parent-new" class="hidden" style="margin-top:8px" placeholder="First and last name" autocomplete="name">
-      <p class="who hidden" id="mentor-hint" style="margin-top:8px">Not listed? Ask a lead to add you to
-        the mentor dropdown in the sheet.</p>
-      <div id="child-box">
-        <label for="parent-child" style="margin-top:12px">Your student</label>
-        <select id="parent-child"></select>
-      </div>
-      <button class="btn" id="parent-btn" type="submit">Link my account</button>
+      <label for="parent-child" style="margin-top:12px">Your student</label>
+      <select id="parent-child" required></select>
+      <button class="btn" id="parent-btn" type="submit">I'm a parent</button>
     </form>
     <div id="parent-msg" class="msg"></div>
   </section>
@@ -67,10 +59,10 @@
     setMsg($('msg'), 'ok', 'Checking in…');
     try {
       const r = await api('checkIn', { code: $('code').value });
-      if (r.role === 'parent' || r.role === 'mentor') {
+      if (r.role === 'parent') {
         setMsg($('msg'), 'ok', r.alreadyMarked
           ? `✓ Thanks, ${r.name}! You're checked in for ${r.shift}.`
-          : `✓ Thanks, ${r.name}! You weren't signed up, so you've been added as a ${r.role} for ${r.shift}.`);
+          : `✓ Thanks, ${r.name}! You weren't signed up, so you've been added as a parent volunteer for ${r.shift}.`);
       } else if (r.alreadyMarked) setMsg($('msg'), 'warn', `You're already marked ${r.status} for ${r.shift}.`);
       else if (r.status === 'Partial') setMsg($('msg'), 'warn', `${r.name}: marked Partial (late) for ${r.shift}`);
       else setMsg($('msg'), 'ok', `✓ ${r.name}: ${r.status} for ${r.shift}`);
@@ -89,34 +81,19 @@
 
   const NOT_LISTED = '__new__';
 
-  let options = { parents: [], mentors: [], students: [] };
-  const vrole = () => document.querySelector('input[name="vrole"]:checked').value;
-
-  function renderVolunteerForm() {
-    const mentor = vrole() === 'mentor';
-    const names = mentor ? options.mentors : options.parents;
-    $('parent-name').innerHTML = '<option value="">Choose your name…</option>' +
-      names.map((n) => `<option>${esc(n)}</option>`).join('') +
-      (mentor ? '' : `<option value="${NOT_LISTED}">My name isn't listed</option>`);
-    $('parent-new').classList.add('hidden');
-    $('child-box').classList.toggle('hidden', mentor);
-    $('mentor-hint').classList.toggle('hidden', !mentor);
-    $('parent-msg').className = 'msg';
-  }
-
   async function showParentSignup() {
     try {
-      options = await api('parentOptions');
+      const o = await api('parentOptions');
+      $('parent-name').innerHTML = '<option value="">Choose your name…</option>' +
+        o.parents.map((n) => `<option>${esc(n)}</option>`).join('') +
+        `<option value="${NOT_LISTED}">My name isn't listed</option>`;
       $('parent-child').innerHTML = '<option value="">Choose your student…</option>' +
-        options.students.map((n) => `<option>${esc(n)}</option>`).join('');
-      renderVolunteerForm();
+        o.students.map((n) => `<option>${esc(n)}</option>`).join('');
       $('parent-card').classList.remove('hidden');
     } catch (e) {
       setMsg($('msg'), 'err', e.message);
     }
   }
-
-  document.querySelectorAll('input[name="vrole"]').forEach((r) => r.addEventListener('change', renderVolunteerForm));
 
   $('parent-name').addEventListener('change', () => {
     $('parent-new').classList.toggle('hidden', $('parent-name').value !== NOT_LISTED);
@@ -126,11 +103,10 @@
     e.preventDefault();
     const picked = $('parent-name').value;
     const name = picked === NOT_LISTED ? $('parent-new').value : picked;
-    if (!name) return setMsg($('parent-msg'), 'err', 'Choose your name first.');
+    if (!name) return setMsg($('parent-msg'), 'err', 'Choose your name, or pick "My name isn\'t listed" and type it.');
     $('parent-btn').disabled = true;
     try {
-      if (vrole() === 'mentor') await api('registerMentor', { name });
-      else await api('registerParent', { name, child: $('parent-child').value });
+      await api('registerParent', { name, child: $('parent-child').value });
       $('parent-card').classList.add('hidden');
       $('checkin-form').classList.remove('hidden');
       $('msg').className = 'msg';
@@ -159,7 +135,7 @@
         return;
       }
       $('member-line').innerHTML = `Hi <b>${esc(me.member.name)}</b>` +
-        (me.member.role === 'parent' ? ' (parent volunteer)' : me.member.role === 'mentor' ? ' (mentor)' : '');
+        (me.member.role === 'parent' ? ' (parent volunteer)' : '');
       if (!me.selfCheckIn) {
         $('checkin-btn').disabled = true;
         setMsg($('msg'), 'warn', 'Check-in is currently closed.');
