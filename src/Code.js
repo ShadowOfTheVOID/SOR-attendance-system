@@ -19,6 +19,10 @@
 
 // The team's "SOR Signups/Attendance '26-'27" spreadsheet (the ID in its URL).
 var SPREADSHEET_ID = '1cNJ4zwLjHkr8MOZk4QYvyJmILBFWjarDGFOgwaHgiJA';
+// "2026-2027 SOR Student Information & Roster" (registration form responses).
+// People are linked automatically by the email they gave on the form.
+var DIRECTORY_SPREADSHEET_ID = '153MOsnFxG_98djfm-1GwoDhmnSJ4PgcMn7WF3vE-3Gc';
+var DIRECTORY_TAB = 'RAW DATA';
 // Firebase Web API key (public; same as public/config.js). A script property
 // named FIREBASE_API_KEY overrides it.
 var FIREBASE_API_KEY = 'AIzaSyCDGs1NXDoFwP0jBM5bASz-XfEcXdYOE4M';
@@ -148,8 +152,9 @@ var ACTIONS = {
   displayCode: apiDisplayCode_,
   getShift: apiGetShift_,
   saveShift: apiSaveShift_,
-  parentOptions: apiParentOptions_,
+  joinOptions: apiJoinOptions_,
   registerParent: apiRegisterParent_,
+  registerStudent: apiRegisterStudent_,
   listAdmins: apiListAdmins_,
   addAdmin: apiAddAdmin_,
   removeAdmin: apiRemoveAdmin_
@@ -173,13 +178,13 @@ function doPost(e) {
 
 function apiMe_(user) {
   var settings = getSettings_();
-  var member = AttendanceLogic.findMemberByEmail(getRoster_(), user.email);
+  var member = resolveMember_(user);
   return {
     orgName: settings.orgName,
     today: todayKey_(),
     email: user.email,
     member: member && { name: member.name, role: member.role },
-    canRegisterAsParent: !member,
+    canJoin: !member,
     isAdmin: isAdmin_(user, settings),
     selfCheckIn: settings.selfCheckIn,
     statuses: AttendanceLogic.STATUSES
@@ -191,7 +196,7 @@ function apiCheckIn_(user, req) {
   var settings = getSettings_();
   if (!settings.selfCheckIn) throw new Error('Check-in is currently closed.');
 
-  var member = AttendanceLogic.findMemberByEmail(getRoster_(), user.email);
+  var member = resolveMember_(user);
   if (!member) {
     throw new Error(user.email + ' is not on the Check-in Roster. Ask an admin to add it.');
   }
@@ -249,24 +254,132 @@ function apiCheckIn_(user, req) {
 }
 
 /**
- * For someone signed in who isn't on the roster yet: parent names that
- * have no email linked, and the students (to say whose parent they are).
+ * The roster entry for this account. If the email isn't on the roster yet
+ * but is on the registration form, the account is linked automatically.
  */
-function apiParentOptions_(user) {
-  if (AttendanceLogic.findMemberByEmail(getRoster_(), user.email)) {
-    throw new Error('You are already on the Check-in Roster.');
+function resolveMember_(user) {
+  var member = AttendanceLogic.findMemberByEmail(getRoster_(), user.email);
+  return member || autoLink_(user);
+}
+
+/** Links an account using the registration form's student/parent emails. Returns the member or null. */
+function autoLink_(user) {
+  var dir = readDirectory_();
+  var asStudent = dir.students.filter(function (d) { return d.email === user.email; })[0];
+  var asParent = dir.parents.filter(function (d) { return d.email === user.email; })[0];
+  if (!asStudent && !asParent) return null;
+
+  return withLock_(function () {
+    var roster = getRoster_();
+    var already = AttendanceLogic.findMemberByEmail(roster, user.email);
+    if (already) return already;
+    var sheet = ss_().getSheetByName(TAB.ROSTER);
+    var link = function (entry, how) {
+      sheet.getRange(entry.sheetRow, 2).setValue(user.email);
+      appendLog_([[new Date(), todayKey_(), '', entry.name, how, 'Auto',
+        user.email + ' (from the registration form)']]);
+      entry.email = user.email;
+      return entry;
+    };
+    if (asStudent) {
+      var st = roster.filter(function (m) {
+        return m.role === 'student' && !m.email && AttendanceLogic.sameName(m.name, asStudent.name);
+      })[0];
+      if (st) return link(st, 'Student linked');
+    }
+    if (asParent) {
+      var named = roster.filter(function (m) { return AttendanceLogic.sameName(m.name, asParent.name); })[0];
+      if (named && named.role === 'parent' && !named.email) return link(named, 'Parent linked');
+      if (!named) {
+        sheet.getRange(sheet.getLastRow() + 1, 1, 1, ROSTER_HEADERS.length)
+          .setValues([[asParent.name, user.email, 'Parent', '']]);
+        appendLog_([[new Date(), todayKey_(), '', asParent.name, 'Parent linked', 'Auto',
+          user.email + ', parent of ' + asParent.child + ' (from the registration form)']]);
+        return { name: asParent.name, email: user.email, role: 'parent', aliases: [] };
+      }
+    }
+    return null;
+  });
+}
+
+/** Registration-form students/parents with emails; cached for 10 minutes. */
+function readDirectory_() {
+  var cache = CacheService.getScriptCache();
+  var cached = cache.get('directory');
+  if (cached) return JSON.parse(cached);
+  var dir = { students: [], parents: [] };
+  try {
+    var sheet = SpreadsheetApp.openById(DIRECTORY_SPREADSHEET_ID).getSheetByName(DIRECTORY_TAB);
+    if (sheet && sheet.getLastRow() > 1) {
+      var values = sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn()).getValues();
+      dir = AttendanceLogic.parseDirectory(values[0], values.slice(1));
+    }
+  } catch (e) {
+    Logger.log('Could not read the registration form sheet: ' + e);
   }
-  var roster = getRoster_();
-  return {
-    parents: roster.filter(function (m) { return m.role === 'parent' && !m.email; })
-      .map(function (m) { return m.name; }),
-    students: readLayout_(getAttendanceSheet_()).students.map(function (st) { return st.name; })
-  };
+  try {
+    cache.put('directory', JSON.stringify(dir), 600);
+  } catch (e) {
+    // Too big to cache; read it again next time.
+  }
+  return dir;
+}
+
+/** The form email on file for this name, if someone else must sign in with it. */
+function protectedEmailFor_(name, list) {
+  var hit = list.filter(function (d) { return AttendanceLogic.sameName(d.name, name); })[0];
+  return hit ? hit.email : null;
 }
 
 /**
- * A parent links their Google account: claims an unlinked parent name on
- * the roster, or adds a new one. req = {name, child}
+ * For someone signed in who isn't on the roster (and wasn't linked
+ * automatically): names they can claim. Names whose email is on the
+ * registration form are left out — those people must sign in with it.
+ */
+function apiJoinOptions_(user) {
+  if (resolveMember_(user)) throw new Error('You are already on the Check-in Roster.');
+  var roster = getRoster_();
+  var dir = readDirectory_();
+  var unclaimed = function (role, list) {
+    return roster.filter(function (m) {
+      return m.role === role && !m.email && !protectedEmailFor_(m.name, list);
+    }).map(function (m) { return m.name; });
+  };
+  return {
+    students: unclaimed('student', dir.students),
+    parents: unclaimed('parent', dir.parents),
+    children: readLayout_(getAttendanceSheet_()).students.map(function (st) { return st.name; })
+  };
+}
+
+/** A student whose email isn't on the registration form links their account. req = {name} */
+function apiRegisterStudent_(user, req) {
+  var name = String(req.name == null ? '' : req.name).trim();
+  return withLock_(function () {
+    var roster = getRoster_();
+    if (AttendanceLogic.findMemberByEmail(roster, user.email)) {
+      throw new Error('You are already on the Check-in Roster.');
+    }
+    var st = roster.filter(function (m) {
+      return m.role === 'student' && AttendanceLogic.sameName(m.name, name);
+    })[0];
+    if (!st) throw new Error('Pick your name from the list.');
+    var onFile = protectedEmailFor_(st.name, readDirectory_().students);
+    if (onFile) {
+      throw new Error('Sign in with the email on your registration form (' +
+        AttendanceLogic.maskEmail(onFile) + ').');
+    }
+    if (st.email) throw new Error('"' + st.name + '" is already linked to another account. Ask a lead.');
+    ss_().getSheetByName(TAB.ROSTER).getRange(st.sheetRow, 2).setValue(user.email);
+    appendLog_([[new Date(), todayKey_(), '', st.name, 'Student linked', 'Self', user.email]]);
+    return { name: st.name, role: 'student' };
+  });
+}
+
+/**
+ * A parent whose email isn't on the registration form links their account:
+ * claims an unlinked parent name on the roster, or adds a new one.
+ * req = {name, child}
  */
 function apiRegisterParent_(user, req) {
   var name = String(req.name == null ? '' : req.name).trim().replace(/\s+/g, ' ');
@@ -283,11 +396,18 @@ function apiRegisterParent_(user, req) {
       return AttendanceLogic.sameName(st.name, child);
     })[0];
     if (!kid) throw new Error('Pick your student from the list.');
+    var onFile = protectedEmailFor_(name, readDirectory_().parents);
+    if (onFile) {
+      throw new Error('Sign in with the email on the registration form (' +
+        AttendanceLogic.maskEmail(onFile) + ').');
+    }
 
     var existing = roster.filter(function (m) { return AttendanceLogic.sameName(m.name, name); })[0];
     var sheet = ss_().getSheetByName(TAB.ROSTER);
     if (existing) {
-      if (existing.role !== 'parent') throw new Error('"' + name + '" is a student, not a parent.');
+      if (existing.role !== 'parent') {
+        throw new Error('"' + name + '" is on the roster as a ' + existing.role + ', not a parent.');
+      }
       if (existing.email) {
         throw new Error('"' + existing.name + '" is already linked to another account. Ask a lead.');
       }

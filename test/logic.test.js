@@ -133,3 +133,29 @@ test('roleOf and parentSlotMatches', () => {
   assert.ok(!L.parentSlotMatches('', simi, all));
   assert.ok(!L.parentSlotMatches('Simi Rajan', simi, all));
 });
+
+test('maskEmail', () => {
+  assert.equal(L.maskEmail('jane.doe@gmail.com'), 'ja***@gmail.com');
+  assert.equal(L.maskEmail('j@x.org'), 'j***@x.org');
+  assert.equal(L.maskEmail('nope'), '***');
+});
+
+test('parseDirectory reads students and up to three guardians from the form sheet', () => {
+  const header = ['Timestamp', 'Student Name (First Name)', 'Student Name (Last Name)', 'Student Email',
+    'Parent/Guardian 1 (First Name)', 'Parent/Guardian 1 (Last Name)', 'Relationship to Youth', 'Email', 'Phone number',
+    'Parent/Guardian 2 (First Name)', 'Parent/Guardian 2 (Last Name)', 'Relationship to Youth 2', 'Email 2',
+    'Parent/Guardian 3 (First Name)', 'Parent/Guardian 3 (Last Name)', 'Email 3'];
+  const rows = [
+    ['t', 'Ana ', ' Alvarez', 'Ana@Gmail.com ', 'Pat', 'Parker', 'Father', 'PAT@x.com', '1', 'Quinn', 'Parker', 'Mother', '', '', '', ''],
+    ['t', 'Ben', 'Brooks', '', 'Sam', 'Brooks', 'Mom', 'sam@x.com', '2', '', '', '', '', 'Lee', 'Brooks', 'lee@x.com'],
+    ['t', '', '', 'orphan@x.com', '', '', '', '', '', '', '', '', '', '', '', '']
+  ];
+  assert.deepEqual(L.parseDirectory(header, rows), {
+    students: [{ name: 'Ana Alvarez', email: 'ana@gmail.com' }],
+    parents: [
+      { name: 'Pat Parker', email: 'pat@x.com', child: 'Ana Alvarez' },
+      { name: 'Sam Brooks', email: 'sam@x.com', child: 'Ben Brooks' },
+      { name: 'Lee Brooks', email: 'lee@x.com', child: 'Ben Brooks' }
+    ]
+  });
+});

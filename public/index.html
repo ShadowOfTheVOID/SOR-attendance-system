@@ -25,16 +25,25 @@
   </section>
 
   <section class="card hidden" id="parent-card">
-    <h2 style="margin-top:0;font-size:1.15rem">Are you a parent volunteer?</h2>
-    <p class="who">Link this Google account once, then check in with the code like everyone else.
-      Students: ask a lead to add your email instead.</p>
+    <h2 style="margin-top:0;font-size:1.15rem">Who are you?</h2>
+    <p class="who">We couldn't match this Google account to the registration form. Link it once,
+      then check in with the code like everyone else. If you filled in the form with a different
+      email, sign out and use that account instead.</p>
     <form id="parent-form">
+      <div class="row" role="radiogroup" style="margin-bottom:12px">
+        <label class="choice"><input type="radio" name="who" value="student" checked> I'm a student</label>
+        <label class="choice"><input type="radio" name="who" value="parent"> I'm a parent</label>
+      </div>
       <label for="parent-name">Your name</label>
       <select id="parent-name"></select>
       <input id="parent-new" class="hidden" style="margin-top:8px" placeholder="First and last name" autocomplete="name">
-      <label for="parent-child" style="margin-top:12px">Your student</label>
-      <select id="parent-child" required></select>
-      <button class="btn" id="parent-btn" type="submit">I'm a parent</button>
+      <p class="who hidden" id="student-hint" style="margin-top:8px">Not listed? Your name may already
+        be linked to the email on your registration form, so sign in with that account, or ask a lead.</p>
+      <div id="child-box" class="hidden">
+        <label for="parent-child" style="margin-top:12px">Your student</label>
+        <select id="parent-child"></select>
+      </div>
+      <button class="btn" id="parent-btn" type="submit">Link my account</button>
     </form>
     <div id="parent-msg" class="msg"></div>
   </section>
@@ -81,19 +90,34 @@
 
   const NOT_LISTED = '__new__';
 
+  let options = { students: [], parents: [], children: [] };
+  const who = () => document.querySelector('input[name="who"]:checked').value;
+
+  function renderJoinForm() {
+    const parent = who() === 'parent';
+    const names = parent ? options.parents : options.students;
+    $('parent-name').innerHTML = '<option value="">Choose your name…</option>' +
+      names.map((n) => `<option>${esc(n)}</option>`).join('') +
+      (parent ? `<option value="${NOT_LISTED}">My name isn't listed</option>` : '');
+    $('parent-new').classList.add('hidden');
+    $('child-box').classList.toggle('hidden', !parent);
+    $('student-hint').classList.toggle('hidden', parent);
+    $('parent-msg').className = 'msg';
+  }
+
   async function showParentSignup() {
     try {
-      const o = await api('parentOptions');
-      $('parent-name').innerHTML = '<option value="">Choose your name…</option>' +
-        o.parents.map((n) => `<option>${esc(n)}</option>`).join('') +
-        `<option value="${NOT_LISTED}">My name isn't listed</option>`;
+      options = await api('joinOptions');
       $('parent-child').innerHTML = '<option value="">Choose your student…</option>' +
-        o.students.map((n) => `<option>${esc(n)}</option>`).join('');
+        options.children.map((n) => `<option>${esc(n)}</option>`).join('');
+      renderJoinForm();
       $('parent-card').classList.remove('hidden');
     } catch (e) {
       setMsg($('msg'), 'err', e.message);
     }
   }
+
+  document.querySelectorAll('input[name="who"]').forEach((r) => r.addEventListener('change', renderJoinForm));
 
   $('parent-name').addEventListener('change', () => {
     $('parent-new').classList.toggle('hidden', $('parent-name').value !== NOT_LISTED);
@@ -103,10 +127,11 @@
     e.preventDefault();
     const picked = $('parent-name').value;
     const name = picked === NOT_LISTED ? $('parent-new').value : picked;
-    if (!name) return setMsg($('parent-msg'), 'err', 'Choose your name, or pick "My name isn\'t listed" and type it.');
+    if (!name) return setMsg($('parent-msg'), 'err', 'Choose your name first.');
     $('parent-btn').disabled = true;
     try {
-      await api('registerParent', { name, child: $('parent-child').value });
+      if (who() === 'parent') await api('registerParent', { name, child: $('parent-child').value });
+      else await api('registerStudent', { name });
       $('parent-card').classList.add('hidden');
       $('checkin-form').classList.remove('hidden');
       $('msg').className = 'msg';
@@ -122,6 +147,7 @@
 
   async function loadMe() {
     $('parent-card').classList.add('hidden');
+    $('checkin-card').classList.remove('hidden');
     $('checkin-form').classList.remove('hidden');
     try {
       const me = await api('me');
@@ -129,9 +155,8 @@
       $('today').textContent = 'Today: ' + me.today;
       $('admin-links').hidden = !me.isAdmin;
       if (!me.member) {
-        $('member-line').innerHTML = `<b>${esc(me.email)}</b> isn't on the Check-in Roster yet.`;
-        $('checkin-form').classList.add('hidden');
-        if (me.canRegisterAsParent) showParentSignup();
+        $('checkin-card').classList.add('hidden');
+        if (me.canJoin) showParentSignup();
         return;
       }
       $('member-line').innerHTML = `Hi <b>${esc(me.member.name)}</b>` +

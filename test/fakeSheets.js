@@ -83,12 +83,16 @@ const toSigned = (buf) => Array.from(buf).map((b) => (b > 127 ? b - 256 : b));
 
 // tokens: { idToken: { email, emailVerified, displayName } } accepted by the fake lookup API.
 function load({ now = new Date('2026-10-05T09:00:00Z'), tokens = {}, apiKey = 'test-key', keyInProps = true } = {}) {
-  const sheets = {};
-  const ss = {
-    getSheetByName: (n) => sheets[n] || null,
-    insertSheet: (n) => (sheets[n] = new FakeSheet(n)),
+  const makeSpreadsheet = (store) => ({
+    getSheetByName: (n) => store[n] || null,
+    insertSheet: (n) => (store[n] = new FakeSheet(n)),
     getSpreadsheetTimeZone: () => 'Etc/UTC',
     toast() {}
+  });
+  const sheets = {};
+  const others = {}; // other spreadsheets by ID
+  const ss = {
+    ...makeSpreadsheet(sheets),
   };
   const props = apiKey && keyInProps ? { FIREBASE_API_KEY: apiKey } : {};
   const fetches = [];
@@ -109,7 +113,7 @@ function load({ now = new Date('2026-10-05T09:00:00Z'), tokens = {}, apiKey = 't
     Date: FixedDate,
     SpreadsheetApp: {
       getActive: () => ss,
-      openById: (id) => { openedIds.push(id); return ss; },
+      openById: (id) => { openedIds.push(id); return others[id] || ss; },
       flush() {},
       getUi: () => ({ alert() {}, createMenu: () => ({ addItem() { return this; }, addSeparator() { return this; }, addToUi() {} }) }),
       newConditionalFormatRule: rule
@@ -158,6 +162,8 @@ function load({ now = new Date('2026-10-05T09:00:00Z'), tokens = {}, apiKey = 't
   };
   return {
     app: context, sheets, props, fetches, openedIds, call, tokens,
+    /** Adds another spreadsheet that openById(id) returns; gives back its sheets store. */
+    addSpreadsheet: (id) => { const store = {}; others[id] = makeSpreadsheet(store); return others[id]; },
     setTime: (iso) => { clock.now = new RealDate(iso).getTime(); }
   };
 }

@@ -75,12 +75,24 @@ function buildAttendanceTab(env) {
   return sh;
 }
 
+const DIRECTORY_ID = '153MOsnFxG_98djfm-1GwoDhmnSJ4PgcMn7WF3vE-3Gc';
+const FORM_HEADER = ['Timestamp', 'Student Name (First Name)', 'Student Name (Last Name)', 'Student Email',
+  'Parent/Guardian 1 (First Name)', 'Parent/Guardian 1 (Last Name)', 'Email',
+  'Parent/Guardian 2 (First Name)', 'Parent/Guardian 2 (Last Name)', 'Email 2'];
+
+/** opts.form: registration-form rows (FORM_HEADER order); opts.emails === false: leave roster emails blank. */
 function fresh(opts = {}) {
   const env = load({ tokens: TOKENS, now: new Date('2026-10-04T13:10:00Z'), ...opts });
   env.att = buildAttendanceTab(env);
+  if (opts.form) {
+    const raw = env.addSpreadsheet(DIRECTORY_ID).insertSheet('RAW DATA');
+    raw.getRange(1, 1, 1, FORM_HEADER.length).setValues([FORM_HEADER]);
+    raw.getRange(2, 1, opts.form.length, FORM_HEADER.length).setValues(opts.form);
+  }
   env.app.setup();
   const roster = env.sheets['Check-in Roster'];
-  const emails = { 'Ana Alvarez': 'ana@example.com', 'Ben Brooks': 'ben@example.com', 'Cara Chen': 'cara@example.com',
+  const emails = opts.emails === false ? {} : {
+    'Ana Alvarez': 'ana@example.com', 'Ben Brooks': 'ben@example.com', 'Cara Chen': 'cara@example.com',
     'Pat Parker': 'pat@example.com', 'Quinn Parker': 'quinn@example.com' };
   for (let r = 2; r <= roster.getLastRow(); r++) roster.set(r, 2, emails[roster.get(r, 1)] || '');
   roster.getRange(roster.getLastRow() + 1, 1, 1, 2).setValues([['Ghost Person', 'ghost@example.com']]);
@@ -420,11 +432,12 @@ test('an unlinked parent can claim their name and then check in', () => {
   Object.assign(env.tokens, t);
   const me = ok(env.call('me', 'tok-robin'));
   assert.equal(me.member, null);
-  assert.equal(me.canRegisterAsParent, true);
+  assert.equal(me.canJoin, true);
 
-  const opts = ok(env.call('parentOptions', 'tok-robin'));
+  const opts = ok(env.call('joinOptions', 'tok-robin'));
   assert.deepEqual(opts.parents, ['Robin Reyes']);
-  assert.deepEqual(opts.students, ['Ana Alvarez', 'Ben Brooks', 'Cara Chen']);
+  assert.deepEqual(opts.children, ['Ana Alvarez', 'Ben Brooks', 'Cara Chen']);
+  assert.deepEqual(opts.students, [], 'every student already has an email');
 
   const r = ok(env.call('registerParent', 'tok-robin', { name: 'robin  reyes', child: 'Cara Chen' }));
   assert.deepEqual(r, { name: 'Robin Reyes', role: 'parent' });
@@ -452,13 +465,91 @@ test('parent registration guards against abuse', () => {
   env.tokens['tok-new'] = { email: 'newparent@example.com', emailVerified: true };
   fail(env.call('registerParent', 'tok-ana', { name: 'Robin Reyes', child: 'Cara Chen' }), /already on the Check-in Roster/,
     'a student cannot also become a parent');
-  fail(env.call('parentOptions', 'tok-ana'), /already on the Check-in Roster/);
+  fail(env.call('joinOptions', 'tok-ana'), /already on the Check-in Roster/);
   fail(env.call('registerParent', 'tok-new', { name: 'Pat Parker', child: 'Ana Alvarez' }), /already linked/,
     'cannot take over a linked parent');
-  fail(env.call('registerParent', 'tok-new', { name: 'Ana Alvarez', child: 'Ben Brooks' }), /is a student/);
+  fail(env.call('registerParent', 'tok-new', { name: 'Ana Alvarez', child: 'Ben Brooks' }), /as a student, not a parent/);
   fail(env.call('registerParent', 'tok-new', { name: 'Dana Diaz', child: 'Nobody' }), /Pick your student/);
   fail(env.call('registerParent', 'tok-new', { name: 'Dana', child: 'Ben Brooks' }), /first and last name/);
   ok(env.call('registerParent', 'tok-new', { name: 'Dana Diaz', child: 'Ben Brooks' }));
   fail(env.call('registerParent', 'tok-new', { name: 'Dana Diaz', child: 'Ben Brooks' }), /already on the Check-in Roster/,
     'only once per account');
+});
+
+// Registration form: Ana (+ parent Pat) and "Benjamin" Brooks (+ new parent Lee Brooks) filled it in; Cara didn't.
+const FORM = [
+  ['t', 'Ana', 'Alvarez', 'Ana@Example.com', 'Pat', 'Parker', 'pat@example.com', '', '', ''],
+  ['t', 'Benjamin', 'Brooks', 'ben@example.com', 'Lee', 'Brooks', 'lee@example.com', 'Robin', 'Reyes', 'robin.form@example.com']
+];
+const formEnv = (now) => {
+  const env = fresh({ form: FORM, emails: false, now: new Date(now || '2026-10-04T13:05:00Z') });
+  Object.assign(env.tokens, {
+    'tok-lee': { email: 'lee@example.com', emailVerified: true },
+    'tok-robin2': { email: 'robin.other@example.com', emailVerified: true }
+  });
+  return env;
+};
+const rosterEmail = (env, name) => env.roster.get(env.roster.cells.findIndex((x) => x && x[0] === name) + 1, 2);
+
+test('students are linked automatically by their registration-form email', () => {
+  const env = formEnv();
+  assert.equal(rosterEmail(env, 'Ana Alvarez'), '');
+  const me = ok(env.call('me', 'tok-ana'));
+  assert.deepEqual(me.member, { name: 'Ana Alvarez', role: 'student' });
+  assert.equal(rosterEmail(env, 'Ana Alvarez'), 'ana@example.com');
+  assert.deepEqual(logRows(env).at(-1).slice(3, 6), ['Ana Alvarez', 'Student linked', 'Auto']);
+});
+
+test('the very first action can be a check-in; linking happens on the way', () => {
+  const env = formEnv();
+  const r = ok(env.call('checkIn', 'tok-ana', { code: codeAt(env, 'Hangar 391') }));
+  assert.equal(r.name, 'Ana Alvarez');
+  assert.equal(env.att.get(ROW.ana, COL.oct4s2), 'Present');
+});
+
+test('parents are linked automatically, and added to the roster if missing', () => {
+  const env = formEnv();
+  assert.deepEqual(ok(env.call('me', 'tok-pat')).member, { name: 'Pat Parker', role: 'parent' });
+  assert.equal(rosterEmail(env, 'Pat Parker'), 'pat@example.com');
+
+  const lee = ok(env.call('me', 'tok-lee')).member;
+  assert.deepEqual(lee, { name: 'Lee Brooks', role: 'parent' });
+  assert.deepEqual(env.roster.cells.at(-1).slice(0, 3), ['Lee Brooks', 'lee@example.com', 'Parent']);
+  assert.match(logRows(env).at(-1)[6], /parent of Benjamin Brooks/);
+  const r = ok(env.call('checkIn', 'tok-lee', { code: codeAt(env, 'Hangar 391') }));
+  assert.equal(env.att.get(14, COL.oct4s2), 'Lee Brooks');
+  assert.equal(r.role, 'parent');
+});
+
+test('a nickname mismatch falls back to picking your name', () => {
+  const env = formEnv();
+  // The form says "Benjamin Brooks", the attendance tab says "Ben Brooks".
+  const me = ok(env.call('me', 'tok-ben'));
+  assert.equal(me.member, null);
+  assert.equal(me.canJoin, true);
+  const opts = ok(env.call('joinOptions', 'tok-ben'));
+  assert.deepEqual(opts.students, ['Ben Brooks', 'Cara Chen'], 'Ana is on the form, so not claimable');
+  assert.deepEqual(opts.parents, ['Quinn Parker'], 'Pat and Robin are on the form');
+  assert.deepEqual(ok(env.call('registerStudent', 'tok-ben', { name: 'Ben Brooks' })), { name: 'Ben Brooks', role: 'student' });
+  assert.equal(rosterEmail(env, 'Ben Brooks'), 'ben@example.com');
+  assert.deepEqual(logRows(env).at(-1).slice(3, 6), ['Ben Brooks', 'Student linked', 'Self']);
+});
+
+test('names with an email on the registration form cannot be claimed by another account', () => {
+  const env = formEnv();
+  env.tokens['tok-x'] = { email: 'x@example.com', emailVerified: true };
+  fail(env.call('registerStudent', 'tok-x', { name: 'Ana Alvarez' }), /registration form \(an\*\*\*@example.com\)/);
+  fail(env.call('registerParent', 'tok-robin2', { name: 'Robin Reyes', child: 'Cara Chen' }),
+    /registration form \(ro\*\*\*@example.com\)/);
+  fail(env.call('registerStudent', 'tok-x', { name: 'Nobody Here' }), /Pick your name/);
+  ok(env.call('registerStudent', 'tok-x', { name: 'Cara Chen' }));
+  env.tokens['tok-y'] = { email: 'y@example.com', emailVerified: true };
+  fail(env.call('registerStudent', 'tok-y', { name: 'Cara Chen' }), /already linked/);
+  fail(env.call('registerStudent', 'tok-x', { name: 'Ben Brooks' }), /already on the Check-in Roster/);
+});
+
+test('without the registration form sheet, linking falls back to self-claim', () => {
+  const env = fresh({ emails: false });
+  assert.equal(ok(env.call('me', 'tok-ana')).member, null);
+  assert.deepEqual(ok(env.call('joinOptions', 'tok-ana')).students, ['Ana Alvarez', 'Ben Brooks', 'Cara Chen']);
 });

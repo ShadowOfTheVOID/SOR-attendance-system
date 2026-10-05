@@ -181,6 +181,54 @@ var AttendanceLogic = (function () {
     return allParents.filter(function (p) { return firstName(p.name) === first; }).length === 1;
   }
 
+  /** "ab***@gmail.com" — enough to recognize your own address, not to read someone else's. */
+  function maskEmail(email) {
+    var e = String(email == null ? '' : email).trim();
+    var at = e.indexOf('@');
+    if (at < 1) return '***';
+    return e.slice(0, Math.min(2, at)) + '***' + e.slice(at);
+  }
+
+  /**
+   * Students and parents with emails from the registration form's sheet.
+   * header: first row; rows: the data rows. Parent N's email is the first
+   * column starting with "Email" after "Parent/Guardian N (First Name)".
+   */
+  function parseDirectory(header, rows) {
+    var h = header.map(function (x) { return normalize(x); });
+    var at = function (label) { return h.indexOf(normalize(label)); };
+    var sFirst = at('Student Name (First Name)');
+    var sLast = at('Student Name (Last Name)');
+    var sEmail = at('Student Email');
+    var guardians = [];
+    for (var n = 1; n <= 6; n++) {
+      var f = at('Parent/Guardian ' + n + ' (First Name)');
+      if (f === -1) continue;
+      var e = -1;
+      for (var i = f + 1; i < h.length; i++) {
+        if (h[i].indexOf('email') === 0) { e = i; break; }
+      }
+      guardians.push({ first: f, last: at('Parent/Guardian ' + n + ' (Last Name)'), email: e });
+    }
+    var clean = function (v) { return String(v == null ? '' : v).trim().replace(/\s+/g, ' '); };
+    var fullName = function (r, fi, li) {
+      return [fi === -1 ? '' : clean(r[fi]), li === -1 ? '' : clean(r[li])].filter(Boolean).join(' ');
+    };
+    var out = { students: [], parents: [] };
+    rows.forEach(function (r) {
+      var student = sFirst === -1 ? '' : fullName(r, sFirst, sLast);
+      if (!student) return;
+      var se = sEmail === -1 ? '' : clean(r[sEmail]).toLowerCase();
+      if (se) out.students.push({ name: student, email: se });
+      guardians.forEach(function (g) {
+        var name = fullName(r, g.first, g.last);
+        var email = g.email === -1 ? '' : clean(r[g.email]).toLowerCase();
+        if (name && email) out.parents.push({ name: name, email: email, child: student });
+      });
+    });
+    return out;
+  }
+
   /** What a check-in with status `incoming` does to the student's existing cell. */
   function mergeCheckIn(existing, incoming) {
     var current = String(existing == null ? '' : existing).trim();
@@ -250,6 +298,8 @@ var AttendanceLogic = (function () {
     sameName: sameName,
     statusForCheckIn: statusForCheckIn,
     roleOf: roleOf,
+    maskEmail: maskEmail,
+    parseDirectory: parseDirectory,
     parentSlotMatches: parentSlotMatches,
     mergeCheckIn: mergeCheckIn,
     parseMinutes: parseMinutes,

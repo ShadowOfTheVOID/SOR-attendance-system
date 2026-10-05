@@ -117,16 +117,22 @@ You need edit access to the attendance spreadsheet, and Node.js
    unpublished script. This adds three tabs to the attendance spreadsheet
    (*Check-in Settings*, *Check-in Roster*, *Check-in Log*), and copies every
    student and parent into **Check-in Roster**.
-7. In **Check-in Roster**, fill column B with each **student's** Google email.
-   You can copy them from "2026-2027 SOR Student Information & Roster". Each
-   one must be the account they'll sign in with.
-   **Parents can link themselves.** The first time a parent signs in, the page
-   asks *"Are you a parent volunteer?"*. They pick their name (or type it if
-   it's missing) and their student, and their email is saved to the roster.
-   Each registration is logged in Check-in Log as `Parent registered`, with
-   the email and child. A wrong one is fixed by clearing that roster row's
-   email, or deleting the row. Parents without a Google account can't use the
-   app, so keep signing them in by hand.
+7. **You don't type any emails.** People are linked to the roster the first
+   time they sign in:
+   - **Automatically,** if their Google email is on the registration form
+     ("2026-2027 SOR Student Information & Roster", tab *RAW DATA*). A
+     student's *Student Email* links them to their attendance row. A
+     *Parent/Guardian* email links them as that parent, and adds them to the
+     roster if they're missing.
+   - **Otherwise,** the page asks *"Who are you?"*. Students pick their name;
+     parents pick or type theirs and pick their student. A name whose email
+     *is* on the form can't be claimed by another account; the page shows a
+     hint (`ab***@gmail.com`) of which account to use.
+
+   Every link is logged in Check-in Log (`Student linked` / `Parent linked` /
+   `Parent registered`, marked `Auto` or `Self`). To undo a wrong one, clear
+   the email in Check-in Roster. The account that runs the script needs at
+   least **view** access to the registration-form spreadsheet.
 8. In **Check-in Settings**:
    - You don't need to touch **Admin emails**. The account that created the
      project and `nhstedd@gmail.com` are always admins, and any admin can add
@@ -220,7 +226,7 @@ It prints your site address, for example `https://sor-attendance.web.app`.
 |---|---|
 | *Your sign-in expired* on every request | `FIREBASE_API_KEY` in `Code.js` must be the same `apiKey` as in `config.js`. If you restricted that key in Google Cloud, do **not** use an "HTTP referrers" restriction, because the script calls it from Google's servers. |
 | *Server error* / *Failed to fetch* | Check `scriptUrl` ends in `/exec`, and that the deployment's access is **Anyone**. |
-| *… is not on the Check-in Roster* | Add the email in column B of Check-in Roster. It must be the Google account they signed in with. |
+| *… is not on the Check-in Roster* / "Who are you?" keeps appearing | Their Google email isn't on the registration form (or their name there differs from the attendance tab). They can pick their name, or a lead can type the email into column B of Check-in Roster. |
 | *… is not a row in the attendance tab* | The name on Check-in Roster must match column A of the attendance tab (case and extra spaces don't matter). |
 | *All parent slots for … are full* | Parent 1–6 are all taken for that shift. A lead adds them by hand (e.g. in a spare row or a note). |
 | *There is no shift today* / wrong shifts listed | Check the `Date` row for today's column, and that *Attendance tab* in Check-in Settings is right. |
