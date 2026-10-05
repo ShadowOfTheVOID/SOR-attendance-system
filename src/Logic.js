@@ -149,6 +149,19 @@ var AttendanceLogic = (function () {
   }
 
   /**
+   * Whether a registration-form name refers to this roster entry: same name,
+   * one of its "Also matches" aliases, or the same first and last word
+   * (so a middle name on the form doesn't matter).
+   */
+  function formNameMatches(formName, entry) {
+    if (sameName(formName, entry.name)) return true;
+    if ((entry.aliases || []).some(function (a) { return sameName(a, formName); })) return true;
+    var f = normalize(formName).split(' ');
+    var e = normalize(entry.name).split(' ');
+    return f.length > 1 && e.length > 1 && f[0] === e[0] && f[f.length - 1] === e[e.length - 1];
+  }
+
+  /**
    * "Partial" when checking in more than partialAfterMin minutes after the
    * shift started, otherwise "Present". null partialAfterMin disables it.
    */
@@ -296,6 +309,7 @@ var AttendanceLogic = (function () {
     findLabelRow: findLabelRow,
     findMemberByEmail: findMemberByEmail,
     sameName: sameName,
+    formNameMatches: formNameMatches,
     statusForCheckIn: statusForCheckIn,
     roleOf: roleOf,
     maskEmail: maskEmail,

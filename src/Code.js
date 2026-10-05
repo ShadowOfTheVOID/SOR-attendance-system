@@ -283,7 +283,7 @@ function autoLink_(user) {
     };
     if (asStudent) {
       var st = roster.filter(function (m) {
-        return m.role === 'student' && !m.email && AttendanceLogic.sameName(m.name, asStudent.name);
+        return m.role === 'student' && !m.email && AttendanceLogic.formNameMatches(asStudent.name, m);
       })[0];
       if (st) return link(st, 'Student linked');
     }
@@ -325,9 +325,9 @@ function readDirectory_() {
   return dir;
 }
 
-/** The form email on file for this name, if someone else must sign in with it. */
-function protectedEmailFor_(name, list) {
-  var hit = list.filter(function (d) { return AttendanceLogic.sameName(d.name, name); })[0];
+/** The form email on file for this roster entry, if they must sign in with it. */
+function protectedEmailFor_(entry, list) {
+  var hit = list.filter(function (d) { return AttendanceLogic.formNameMatches(d.name, entry); })[0];
   return hit ? hit.email : null;
 }
 
@@ -342,7 +342,7 @@ function apiJoinOptions_(user) {
   var dir = readDirectory_();
   var unclaimed = function (role, list) {
     return roster.filter(function (m) {
-      return m.role === role && !m.email && !protectedEmailFor_(m.name, list);
+      return m.role === role && !m.email && !protectedEmailFor_(m, list);
     }).map(function (m) { return m.name; });
   };
   return {
@@ -364,7 +364,7 @@ function apiRegisterStudent_(user, req) {
       return m.role === 'student' && AttendanceLogic.sameName(m.name, name);
     })[0];
     if (!st) throw new Error('Pick your name from the list.');
-    var onFile = protectedEmailFor_(st.name, readDirectory_().students);
+    var onFile = protectedEmailFor_(st, readDirectory_().students);
     if (onFile) {
       throw new Error('Sign in with the email on your registration form (' +
         AttendanceLogic.maskEmail(onFile) + ').');
@@ -396,7 +396,7 @@ function apiRegisterParent_(user, req) {
       return AttendanceLogic.sameName(st.name, child);
     })[0];
     if (!kid) throw new Error('Pick your student from the list.');
-    var onFile = protectedEmailFor_(name, readDirectory_().parents);
+    var onFile = protectedEmailFor_({ name: name, aliases: [] }, readDirectory_().parents);
     if (onFile) {
       throw new Error('Sign in with the email on the registration form (' +
         AttendanceLogic.maskEmail(onFile) + ').');

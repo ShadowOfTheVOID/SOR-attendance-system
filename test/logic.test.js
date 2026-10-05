@@ -159,3 +159,11 @@ test('parseDirectory reads students and up to three guardians from the form shee
     ]
   });
 });
+
+test('formNameMatches: exact, alias, or same first and last word', () => {
+  assert.ok(L.formNameMatches('Shravani Swapnil Lad', { name: 'Shravani Lad' }));
+  assert.ok(L.formNameMatches('katherine zadorognuk', { name: 'Katya Zadorognuk', aliases: ['Katherine Zadorognuk'] }));
+  assert.ok(!L.formNameMatches('Katherine Zadorognuk', { name: 'Katya Zadorognuk', aliases: [] }));
+  assert.ok(!L.formNameMatches('Shravani Kumar', { name: 'Shravani Lad' }));
+  assert.ok(!L.formNameMatches('Lad', { name: 'Shravani Lad' }));
+});

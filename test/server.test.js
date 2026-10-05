@@ -553,3 +553,17 @@ test('without the registration form sheet, linking falls back to self-claim', ()
   assert.equal(ok(env.call('me', 'tok-ana')).member, null);
   assert.deepEqual(ok(env.call('joinOptions', 'tok-ana')).students, ['Ana Alvarez', 'Ben Brooks', 'Cara Chen']);
 });
+
+test('form names with a middle name, or listed under Also matches, link automatically', () => {
+  const form = [
+    ['t', 'Cara Mei', 'Chen', 'cara@example.com', '', '', '', '', '', ''],
+    ['t', 'Benjamin', 'Brooks', 'ben@example.com', '', '', '', '', '', '']
+  ];
+  const env = fresh({ form, emails: false });
+  assert.deepEqual(ok(env.call('me', 'tok-cara')).member, { name: 'Cara Chen', role: 'student' }, 'middle name ignored');
+
+  assert.equal(ok(env.call('me', 'tok-ben')).member, null, 'nickname needs an alias');
+  const row = env.roster.cells.findIndex((x) => x && x[0] === 'Ben Brooks') + 1;
+  env.roster.set(row, 4, 'Benjamin Brooks');
+  assert.deepEqual(ok(env.call('me', 'tok-ben')).member, { name: 'Ben Brooks', role: 'student' });
+});
