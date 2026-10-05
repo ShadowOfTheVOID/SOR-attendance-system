@@ -157,7 +157,7 @@ function load({ now = new Date('2026-10-05T09:00:00Z'), tokens = {}, apiKey = 't
     return JSON.parse(out.getContent());
   };
   return {
-    app: context, sheets, props, fetches, openedIds, call,
+    app: context, sheets, props, fetches, openedIds, call, tokens,
     setTime: (iso) => { clock.now = new RealDate(iso).getTime(); }
   };
 }

@@ -117,11 +117,16 @@ You need edit access to the attendance spreadsheet, and Node.js
    unpublished script. This adds three tabs to the attendance spreadsheet
    (*Check-in Settings*, *Check-in Roster*, *Check-in Log*), and copies every
    student and parent into **Check-in Roster**.
-7. In **Check-in Roster**, fill column B with each person's Google email. You
-   can copy students' and parents' emails from
-   "2026-2027 SOR Student Information & Roster". Each one must be the account
-   they'll sign in with. Parents without a Google account can't use the app;
-   keep signing them in by hand.
+7. In **Check-in Roster**, fill column B with each **student's** Google email.
+   You can copy them from "2026-2027 SOR Student Information & Roster". Each
+   one must be the account they'll sign in with.
+   **Parents can link themselves.** The first time a parent signs in, the page
+   asks *"Are you a parent volunteer?"*. They pick their name (or type it if
+   it's missing) and their student, and their email is saved to the roster.
+   Each registration is logged in Check-in Log as `Parent registered`, with
+   the email and child. A wrong one is fixed by clearing that roster row's
+   email, or deleting the row. Parents without a Google account can't use the
+   app, so keep signing them in by hand.
 8. In **Check-in Settings**:
    - You don't need to touch **Admin emails**. The account that created the
      project and `nhstedd@gmail.com` are always admins, and any admin can add

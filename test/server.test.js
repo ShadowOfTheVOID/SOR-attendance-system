@@ -412,3 +412,53 @@ test('full parent slots give a clear error', () => {
   [13, 14, 15, 16, 17, 18].forEach((row) => env.att.set(row, COL.oct6, 'Someone ' + row));
   fail(env.call('checkIn', 'tok-quinn', { code: codeAt(env, 'Hangar 391') }), /parent slots .* are full/);
 });
+
+test('an unlinked parent can claim their name and then check in', () => {
+  const env = fresh({ now: new Date('2026-10-04T13:05:00Z') });
+  // Robin Reyes is on the roster (from the mapping tab) with no email yet.
+  const t = { 'tok-robin': { email: 'robin@example.com', emailVerified: true } };
+  Object.assign(env.tokens, t);
+  const me = ok(env.call('me', 'tok-robin'));
+  assert.equal(me.member, null);
+  assert.equal(me.canRegisterAsParent, true);
+
+  const opts = ok(env.call('parentOptions', 'tok-robin'));
+  assert.deepEqual(opts.parents, ['Robin Reyes']);
+  assert.deepEqual(opts.students, ['Ana Alvarez', 'Ben Brooks', 'Cara Chen']);
+
+  const r = ok(env.call('registerParent', 'tok-robin', { name: 'robin  reyes', child: 'Cara Chen' }));
+  assert.deepEqual(r, { name: 'Robin Reyes', role: 'parent' });
+  const row = env.roster.cells.findIndex((x) => x && x[0] === 'Robin Reyes') + 1;
+  assert.equal(env.roster.get(row, 2), 'robin@example.com');
+  assert.match(logRows(env).at(-1)[6], /robin@example.com, parent of Cara Chen/);
+
+  const c = ok(env.call('checkIn', 'tok-robin', { code: codeAt(env, 'Hangar 391') }));
+  assert.equal(c.role, 'parent');
+  assert.equal(c.alreadyMarked, true, 'their Female Parent sign-up is recognized');
+});
+
+test('a parent whose name is missing can add it', () => {
+  const env = fresh();
+  env.tokens['tok-new'] = { email: 'newparent@example.com', emailVerified: true };
+  ok(env.call('registerParent', 'tok-new', { name: 'Dana Diaz', child: 'Ben Brooks' }));
+  const last = env.roster.cells.at(-1);
+  assert.deepEqual(last.slice(0, 3), ['Dana Diaz', 'newparent@example.com', 'Parent']);
+  assert.match(logRows(env).at(-1)[6], /parent of Ben Brooks \(new name\)/);
+  assert.equal(ok(env.call('me', 'tok-new')).member.role, 'parent');
+});
+
+test('parent registration guards against abuse', () => {
+  const env = fresh();
+  env.tokens['tok-new'] = { email: 'newparent@example.com', emailVerified: true };
+  fail(env.call('registerParent', 'tok-ana', { name: 'Robin Reyes', child: 'Cara Chen' }), /already on the Check-in Roster/,
+    'a student cannot also become a parent');
+  fail(env.call('parentOptions', 'tok-ana'), /already on the Check-in Roster/);
+  fail(env.call('registerParent', 'tok-new', { name: 'Pat Parker', child: 'Ana Alvarez' }), /already linked/,
+    'cannot take over a linked parent');
+  fail(env.call('registerParent', 'tok-new', { name: 'Ana Alvarez', child: 'Ben Brooks' }), /is a student/);
+  fail(env.call('registerParent', 'tok-new', { name: 'Dana Diaz', child: 'Nobody' }), /Pick your student/);
+  fail(env.call('registerParent', 'tok-new', { name: 'Dana', child: 'Ben Brooks' }), /first and last name/);
+  ok(env.call('registerParent', 'tok-new', { name: 'Dana Diaz', child: 'Ben Brooks' }));
+  fail(env.call('registerParent', 'tok-new', { name: 'Dana Diaz', child: 'Ben Brooks' }), /already on the Check-in Roster/,
+    'only once per account');
+});

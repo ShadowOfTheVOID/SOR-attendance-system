@@ -24,6 +24,21 @@
     <div id="msg" class="msg"></div>
   </section>
 
+  <section class="card hidden" id="parent-card">
+    <h2 style="margin-top:0;font-size:1.15rem">Are you a parent volunteer?</h2>
+    <p class="who">Link this Google account once, then check in with the code like everyone else.
+      Students: ask a lead to add your email instead.</p>
+    <form id="parent-form">
+      <label for="parent-name">Your name</label>
+      <select id="parent-name"></select>
+      <input id="parent-new" class="hidden" style="margin-top:8px" placeholder="First and last name" autocomplete="name">
+      <label for="parent-child" style="margin-top:12px">Your student</label>
+      <select id="parent-child" required></select>
+      <button class="btn" id="parent-btn" type="submit">I'm a parent</button>
+    </form>
+    <div id="parent-msg" class="msg"></div>
+  </section>
+
   <section class="card signed-in hidden" id="admin-links" hidden>
     <b>Admin</b>
     <div class="links"><a href="display.html">Open display (code + QR)</a><a href="admin.html">Edit attendance</a></div>
@@ -64,15 +79,59 @@
 
   $('checkin-form').addEventListener('submit', (e) => { e.preventDefault(); submit(); });
 
-  requireSignIn(async () => {
+  const NOT_LISTED = '__new__';
+
+  async function showParentSignup() {
+    try {
+      const o = await api('parentOptions');
+      $('parent-name').innerHTML = '<option value="">Choose your name…</option>' +
+        o.parents.map((n) => `<option>${esc(n)}</option>`).join('') +
+        `<option value="${NOT_LISTED}">My name isn't listed</option>`;
+      $('parent-child').innerHTML = '<option value="">Choose your student…</option>' +
+        o.students.map((n) => `<option>${esc(n)}</option>`).join('');
+      $('parent-card').classList.remove('hidden');
+    } catch (e) {
+      setMsg($('msg'), 'err', e.message);
+    }
+  }
+
+  $('parent-name').addEventListener('change', () => {
+    $('parent-new').classList.toggle('hidden', $('parent-name').value !== NOT_LISTED);
+  });
+
+  $('parent-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const picked = $('parent-name').value;
+    const name = picked === NOT_LISTED ? $('parent-new').value : picked;
+    if (!name) return setMsg($('parent-msg'), 'err', 'Choose your name, or pick "My name isn\'t listed" and type it.');
+    $('parent-btn').disabled = true;
+    try {
+      await api('registerParent', { name, child: $('parent-child').value });
+      $('parent-card').classList.add('hidden');
+      $('checkin-form').classList.remove('hidden');
+      $('msg').className = 'msg';
+      await loadMe();
+    } catch (err) {
+      setMsg($('parent-msg'), 'err', err.message);
+    } finally {
+      $('parent-btn').disabled = false;
+    }
+  });
+
+  requireSignIn(loadMe);
+
+  async function loadMe() {
+    $('parent-card').classList.add('hidden');
+    $('checkin-form').classList.remove('hidden');
     try {
       const me = await api('me');
       $('title').textContent = me.orgName + ' Attendance';
       $('today').textContent = 'Today: ' + me.today;
       $('admin-links').hidden = !me.isAdmin;
       if (!me.member) {
-        $('member-line').innerHTML = `<b>${esc(me.email)}</b> isn't on the Check-in Roster. Ask an admin to add it.`;
+        $('member-line').innerHTML = `<b>${esc(me.email)}</b> isn't on the Check-in Roster yet.`;
         $('checkin-form').classList.add('hidden');
+        if (me.canRegisterAsParent) showParentSignup();
         return;
       }
       $('member-line').innerHTML = `Hi <b>${esc(me.member.name)}</b>` +
@@ -86,7 +145,7 @@
     } catch (e) {
       setMsg($('msg'), 'err', e.message);
     }
-  });
+  }
 </script>
 </body>
 </html>

@@ -148,6 +148,8 @@ var ACTIONS = {
   displayCode: apiDisplayCode_,
   getShift: apiGetShift_,
   saveShift: apiSaveShift_,
+  parentOptions: apiParentOptions_,
+  registerParent: apiRegisterParent_,
   listAdmins: apiListAdmins_,
   addAdmin: apiAddAdmin_,
   removeAdmin: apiRemoveAdmin_
@@ -177,6 +179,7 @@ function apiMe_(user) {
     today: todayKey_(),
     email: user.email,
     member: member && { name: member.name, role: member.role },
+    canRegisterAsParent: !member,
     isAdmin: isAdmin_(user, settings),
     selfCheckIn: settings.selfCheckIn,
     statuses: AttendanceLogic.STATUSES
@@ -242,6 +245,61 @@ function apiCheckIn_(user, req) {
       alreadyMarked: !result.changed,
       shift: shift.label
     };
+  });
+}
+
+/**
+ * For someone signed in who isn't on the roster yet: parent names that
+ * have no email linked, and the students (to say whose parent they are).
+ */
+function apiParentOptions_(user) {
+  if (AttendanceLogic.findMemberByEmail(getRoster_(), user.email)) {
+    throw new Error('You are already on the Check-in Roster.');
+  }
+  var roster = getRoster_();
+  return {
+    parents: roster.filter(function (m) { return m.role === 'parent' && !m.email; })
+      .map(function (m) { return m.name; }),
+    students: readLayout_(getAttendanceSheet_()).students.map(function (st) { return st.name; })
+  };
+}
+
+/**
+ * A parent links their Google account: claims an unlinked parent name on
+ * the roster, or adds a new one. req = {name, child}
+ */
+function apiRegisterParent_(user, req) {
+  var name = String(req.name == null ? '' : req.name).trim().replace(/\s+/g, ' ');
+  var child = String(req.child == null ? '' : req.child).trim();
+  if (name.split(' ').length < 2 || name.length > 60) {
+    throw new Error('Enter your first and last name.');
+  }
+  return withLock_(function () {
+    var roster = getRoster_();
+    if (AttendanceLogic.findMemberByEmail(roster, user.email)) {
+      throw new Error('You are already on the Check-in Roster.');
+    }
+    var kid = readLayout_(getAttendanceSheet_()).students.filter(function (st) {
+      return AttendanceLogic.sameName(st.name, child);
+    })[0];
+    if (!kid) throw new Error('Pick your student from the list.');
+
+    var existing = roster.filter(function (m) { return AttendanceLogic.sameName(m.name, name); })[0];
+    var sheet = ss_().getSheetByName(TAB.ROSTER);
+    if (existing) {
+      if (existing.role !== 'parent') throw new Error('"' + name + '" is a student, not a parent.');
+      if (existing.email) {
+        throw new Error('"' + existing.name + '" is already linked to another account. Ask a lead.');
+      }
+      sheet.getRange(existing.sheetRow, 2).setValue(user.email);
+      name = existing.name;
+    } else {
+      sheet.getRange(sheet.getLastRow() + 1, 1, 1, ROSTER_HEADERS.length)
+        .setValues([[name, user.email, 'Parent', '']]);
+    }
+    appendLog_([[new Date(), todayKey_(), '', name, 'Parent registered', 'Self',
+      user.email + ', parent of ' + kid.name + (existing ? '' : ' (new name)')]]);
+    return { name: name, role: 'parent' };
   });
 }
 
@@ -562,8 +620,9 @@ function getRoster_() {
   var sheet = ss_().getSheetByName(TAB.ROSTER);
   if (!sheet || sheet.getLastRow() < 2) return [];
   return sheet.getRange(2, 1, sheet.getLastRow() - 1, ROSTER_HEADERS.length).getValues()
-    .map(function (r) {
+    .map(function (r, i) {
       return {
+        sheetRow: i + 2,
         name: String(r[0]).trim(),
         email: String(r[1]).trim().toLowerCase(),
         role: AttendanceLogic.roleOf(r[2]),
