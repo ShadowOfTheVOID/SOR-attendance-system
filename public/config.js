@@ -8,5 +8,5 @@ window.APP_CONFIG = {
     appId: '1:104564537181:web:bccfebd0484c4f980adab4'
   },
   // Apps Script → Deploy → Manage deployments → Web app URL (ends in /exec)
-  scriptUrl: 'https://script.google.com/macros/s/PASTE_DEPLOYMENT_ID/exec'
+  scriptUrl: 'https://script.google.com/macros/s/AKfycbxPlFDCSbu12AW0mszqfzIzis8ISSxINaxyxrYypX3idbKAZHrjZuIvNi6m-SgTOGhEsw/exec'
 };
