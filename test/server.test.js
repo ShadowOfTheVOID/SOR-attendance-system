@@ -239,9 +239,17 @@ test('auth: tokens are required, verified, and cached', () => {
   assert.deepEqual(ok(env.call('me', 'tok-ana')).member, { name: 'Ana Alvarez' });
 });
 
-test('missing Firebase API key is reported', () => {
-  const env = fresh({ apiKey: null });
-  fail(env.call('me', 'tok-ana'), /Firebase API key/);
+test('uses the built-in Firebase API key when no script property overrides it', () => {
+  const builtIn = 'AIzaSyCDGs1NXDoFwP0jBM5bASz-XfEcXdYOE4M';
+  const env = fresh({ apiKey: builtIn, keyInProps: false });
+  assert.equal(ok(env.call('me', 'tok-ana')).member.name, 'Ana Alvarez');
+  assert.match(env.fetches[0], new RegExp('key=' + builtIn));
+});
+
+test('opens the team spreadsheet by ID (standalone script)', () => {
+  const env = fresh();
+  ok(env.call('me', 'tok-ana'));
+  assert.deepEqual([...new Set(env.openedIds)], ['1cNJ4zwLjHkr8MOZk4QYvyJmILBFWjarDGFOgwaHgiJA']);
 });
 
 test('admin-only actions reject students', () => {

@@ -1,6 +1,7 @@
 /**
- * SOR Attendance — check-in API (Google Apps Script bound to the team's
- * "SOR Signups/Attendance" spreadsheet).
+ * SOR Attendance — check-in API. A standalone Google Apps Script project
+ * (kept separate from the sheet's own scripts so nothing collides) that
+ * opens the team's "SOR Signups/Attendance" spreadsheet by ID.
  *
  * The web pages live on Firebase Hosting and call doPost() with a Firebase
  * ID token from Google sign-in. A check-in needs the rotating code shown on
@@ -14,6 +15,12 @@
  *   Check-in Roster     Name (as in column A) | Google email
  *   Check-in Log        every check-in, rejected code and admin edit
  */
+
+// The team's "SOR Signups/Attendance '26-'27" spreadsheet (the ID in its URL).
+var SPREADSHEET_ID = '1cNJ4zwLjHkr8MOZk4QYvyJmILBFWjarDGFOgwaHgiJA';
+// Firebase Web API key (public; same as public/config.js). A script property
+// named FIREBASE_API_KEY overrides it.
+var FIREBASE_API_KEY = 'AIzaSyCDGs1NXDoFwP0jBM5bASz-XfEcXdYOE4M';
 
 // Always admins; can't be removed from the website. The account that set up
 // the script is always an admin too. Other admins are managed on /admin.html.
@@ -57,17 +64,9 @@ var TOKEN_CACHE_SECONDS = 300;
 
 // ---------------------------------------------------------------- Menu / setup
 
-function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu('Check-in')
-    .addItem('Set up check-in tabs', 'setup')
-    .addItem('Add student names to Check-in Roster', 'fillRosterNames')
-    .addItem('Set Firebase API key…', 'promptFirebaseApiKey')
-    .addToUi();
-}
-
+/** Run once from the Apps Script editor: creates the check-in tabs and fills the roster. */
 function setup() {
-  var ss = SpreadsheetApp.getActive();
+  var ss = ss_();
 
   var settings = getOrCreateSheet_(ss, TAB.SETTINGS, ['Setting', 'Value']);
   settings.getRange('B:B').setNumberFormat('@');
@@ -86,7 +85,7 @@ function setup() {
 
 /** Appends every student in the attendance tab that is not yet on the Check-in Roster. */
 function fillRosterNames() {
-  var ss = SpreadsheetApp.getActive();
+  var ss = ss_();
   var roster = getOrCreateSheet_(ss, TAB.ROSTER, ROSTER_HEADERS);
   var known = getRoster_().map(function (m) { return m.name; });
   var added = readLayout_(getAttendanceSheet_()).students
@@ -97,20 +96,8 @@ function fillRosterNames() {
   if (added.length) {
     roster.getRange(roster.getLastRow() + 1, 1, added.length, 2).setValues(added);
   }
-  SpreadsheetApp.getUi().alert(added.length + ' name(s) added to "' + TAB.ROSTER +
+  Logger.log(added.length + ' name(s) added to "' + TAB.ROSTER +
     '". Fill in each student\'s Google email in column B.');
-}
-
-function promptFirebaseApiKey() {
-  var ui = SpreadsheetApp.getUi();
-  var res = ui.prompt('Firebase API key',
-    'Paste the Web API key from Firebase console > Project settings > General:',
-    ui.ButtonSet.OK_CANCEL);
-  if (res.getSelectedButton() !== ui.Button.OK) return;
-  var key = res.getResponseText().trim();
-  if (!key) return;
-  PropertiesService.getScriptProperties().setProperty('FIREBASE_API_KEY', key);
-  ui.alert('Firebase API key saved.');
 }
 
 // ---------------------------------------------------------------- API
@@ -356,7 +343,7 @@ function apiRemoveAdmin_(user, req) {
 
 function getAttendanceSheet_() {
   var name = getSettings_().attendanceTab;
-  var sheet = SpreadsheetApp.getActive().getSheetByName(name);
+  var sheet = ss_().getSheetByName(name);
   if (!sheet) {
     throw new Error('Attendance tab "' + name + '" not found. Fix it in "' + TAB.SETTINGS + '".');
   }
@@ -398,7 +385,7 @@ function readShifts_(sheet, layout, dateKey) {
   var range = sheet.getRange(1, 1, height, lastCol);
   var values = range.getValues();
   var shown = range.getDisplayValues();
-  var tz = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
+  var tz = ss_().getSpreadsheetTimeZone();
   var shifts = [];
   var seen = {};
   for (var c = 2; c <= lastCol; c++) {
@@ -455,7 +442,7 @@ function getOrCreateSheet_(ss, name, headers) {
 }
 
 function getSettings_() {
-  var sheet = SpreadsheetApp.getActive().getSheetByName(TAB.SETTINGS);
+  var sheet = ss_().getSheetByName(TAB.SETTINGS);
   var map = {};
   if (sheet && sheet.getLastRow() > 1) {
     sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues().forEach(function (r) {
@@ -479,7 +466,7 @@ function getSettings_() {
 }
 
 function getRoster_() {
-  var sheet = SpreadsheetApp.getActive().getSheetByName(TAB.ROSTER);
+  var sheet = ss_().getSheetByName(TAB.ROSTER);
   if (!sheet || sheet.getLastRow() < 2) return [];
   return sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues()
     .map(function (r) {
@@ -490,8 +477,8 @@ function getRoster_() {
 
 function appendLog_(rows) {
   if (!rows.length) return;
-  var log = SpreadsheetApp.getActive().getSheetByName(TAB.LOG) ||
-    getOrCreateSheet_(SpreadsheetApp.getActive(), TAB.LOG, LOG_HEADERS);
+  var log = ss_().getSheetByName(TAB.LOG) ||
+    getOrCreateSheet_(ss_(), TAB.LOG, LOG_HEADERS);
   log.getRange(log.getLastRow() + 1, 1, rows.length, LOG_HEADERS.length).setValues(rows);
 }
 
@@ -501,8 +488,9 @@ function appendLog_(rows) {
  */
 function verifyIdToken_(idToken) {
   if (!idToken) throw new Error('Please sign in.');
-  var apiKey = PropertiesService.getScriptProperties().getProperty('FIREBASE_API_KEY');
-  if (!apiKey) throw new Error('Server not configured: run Check-in > Set Firebase API key…');
+  var apiKey = PropertiesService.getScriptProperties().getProperty('FIREBASE_API_KEY') ||
+    FIREBASE_API_KEY;
+  if (!apiKey) throw new Error('Server not configured: set FIREBASE_API_KEY in Code.gs.');
 
   var cache = CacheService.getScriptCache();
   var cacheKey = 'tok_' + Utilities.base64EncodeWebSafe(
@@ -543,7 +531,7 @@ function isAdmin_(user, settings) {
 
 /** Writes a Check-in Settings value, adding the row if it is missing. */
 function setSetting_(key, value) {
-  var sheet = getOrCreateSheet_(SpreadsheetApp.getActive(), TAB.SETTINGS, ['Setting', 'Value']);
+  var sheet = getOrCreateSheet_(ss_(), TAB.SETTINGS, ['Setting', 'Value']);
   var last = sheet.getLastRow();
   var keys = last > 1 ? sheet.getRange(2, 1, last - 1, 1).getValues() : [];
   for (var i = 0; i < keys.length; i++) {
@@ -613,6 +601,14 @@ function findLocationForCode_(locations, dateKey, code, nowMs) {
   return null;
 }
 
+var ss_cache_ = null;
+
+/** The attendance spreadsheet. */
+function ss_() {
+  if (!ss_cache_) ss_cache_ = SpreadsheetApp.openById(SPREADSHEET_ID);
+  return ss_cache_;
+}
+
 function isDate_(v) {
   return Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime());
 }
@@ -622,12 +618,12 @@ function assertDateKey_(dateKey) {
 }
 
 function todayKey_() {
-  return Utilities.formatDate(new Date(), SpreadsheetApp.getActive().getSpreadsheetTimeZone(),
+  return Utilities.formatDate(new Date(), ss_().getSpreadsheetTimeZone(),
     'yyyy-MM-dd');
 }
 
 function nowMinutes_() {
-  var hhmm = Utilities.formatDate(new Date(), SpreadsheetApp.getActive().getSpreadsheetTimeZone(),
+  var hhmm = Utilities.formatDate(new Date(), ss_().getSpreadsheetTimeZone(),
     'HH:mm');
   return AttendanceLogic.parseTimeLoose(hhmm);
 }

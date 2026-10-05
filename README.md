@@ -80,50 +80,60 @@ You need edit access to the attendance spreadsheet, and Node.js
 > script runs as whoever sets it up. If that's a personal account and it loses
 > access to the sheet later, check-in stops working.
 
-### Step 1: Add the script to the attendance spreadsheet
+### Step 1: Create a separate Apps Script project
 
-1. Open **SOR Signups/Attendance '26-'27** and go to **Extensions → Apps Script**.
-2. Open `Code.gs`, delete what's there, and paste this repo's `src/Code.js`.
+> **Don't put this code in the spreadsheet's existing script.**
+> *SOR Signups/Attendance '26-'27* already has its own Apps Script project
+> (Code.gs, Prune.gs, SlackTrigger.gs, GroupPastDates.gs). Check-in is a
+> separate project that opens the sheet by its ID, so neither can break the
+> other.
+
+1. Go to <https://script.google.com> and click **New project**. Rename it
+   (top left) to **SOR Check-in**.
+2. Open the default `Code.gs`. It's empty apart from `myFunction`, so replace
+   all of it with this repo's `src/Code.js`.
 3. Click **+ → Script**, name it `Logic`, and paste `src/Logic.js`.
 4. Click **⚙ Project Settings**, tick **Show "appsscript.json" manifest file**,
    go back to the editor, open `appsscript.json`, and paste `src/appsscript.json`.
-5. Save (Ctrl/Cmd+S). Go back to the sheet and **reload the page**. A
-   **Check-in** menu appears.
-6. Click **Check-in → Set up check-in tabs**. Google asks for permission:
-   **Continue → choose the account → Advanced → Go to (project) (unsafe) → Allow**.
-   It says "unsafe" only because this is your own unpublished script.
-   This creates the three tabs and copies every student name into
-   **Check-in Roster**.
+5. Save (Ctrl/Cmd+S).
+6. In the toolbar's function dropdown, pick **`setup`** and click **Run**.
+   Google asks for permission:
+   **Review permissions → choose the account → Advanced → Go to SOR Check-in
+   (unsafe) → Allow**. It says "unsafe" only because this is your own
+   unpublished script. This adds three tabs to the attendance spreadsheet
+   (*Check-in Settings*, *Check-in Roster*, *Check-in Log*) and copies every
+   student name into **Check-in Roster**.
 7. In **Check-in Roster**, fill column B with each student's Google email. You
    can copy them from the *Student Email* column of
    "2026-2027 SOR Student Information & Roster". Each one must be the account
    they'll sign in with.
 8. In **Check-in Settings**:
-   - You don't need to touch **Admin emails**. The setup account and
-     `nhstedd@gmail.com` are always admins, and any admin can add or remove
-     others on `/admin.html` → **Admins**. Those changes are saved in this row.
+   - You don't need to touch **Admin emails**. The account that created the
+     project and `nhstedd@gmail.com` are always admins, and any admin can add
+     or remove others on `/admin.html` → **Admins**. Those changes are saved
+     in this row.
    - **Attendance tab** is `Offseason 2026`. Change it when build season gets
      its own tab.
 
-### Step 2: Firebase project (for Google sign-in and hosting)
+The spreadsheet ID and the Firebase API key are already filled in at the top
+of `Code.js` (`SPREADSHEET_ID`, `FIREBASE_API_KEY`). Only change them if you
+point it at a different spreadsheet or Firebase project.
 
-1. Go to <https://console.firebase.google.com> → **Create a project**. Name it
-   (for example `sor-attendance`). You can turn Google Analytics off.
-2. Left menu: **Build → Authentication → Get started → Sign-in method → Google →
-   Enable**. Pick a support email and click **Save**.
-3. Click **⚙ (Project settings) → General**. Under **Your apps**, click the
-   **Web `</>`** icon, give it a nickname, and click **Register app**. You don't
-   need to tick Hosting here.
-4. Firebase shows a `firebaseConfig = { … }` block. Open `public/config.js` in
-   this repo and copy `apiKey`, `authDomain`, `projectId` and `appId` into the
-   `firebase` section.
-5. Back in the Google Sheet: **Check-in → Set Firebase API key…**. Paste the
-   same `apiKey` value. The script uses it to check that sign-ins really came
-   from your Firebase project.
+### Step 2: Firebase project (already done for `sor-attendance`)
+
+The Firebase project **sor-attendance** exists, Google sign-in is enabled,
+and `public/config.js` already has its values. For a new project you would:
+
+1. Go to <https://console.firebase.google.com> → **Create a project**.
+2. **Security → Authentication → Get started → Sign-in method → Google →
+   Enable**, pick a support email, **Save**.
+3. **Project Overview → + Add app → Web `</>`** → register. Copy `apiKey`,
+   `authDomain`, `projectId` and `appId` into `public/config.js`, and the
+   same `apiKey` into `FIREBASE_API_KEY` in `Code.js`.
 
 ### Step 3: Publish the script as an API
 
-1. In the Apps Script editor: **Deploy → New deployment**. Click ⚙ next to
+1. In the **SOR Check-in** Apps Script editor: **Deploy → New deployment**. Click ⚙ next to
    "Select type" and choose **Web app**.
 2. Set **Execute as: Me** and **Who has access: Anyone**. It must be *Anyone*,
    not "Anyone with Google account", or the website can't reach it. The script
@@ -164,7 +174,8 @@ It prints your site address, for example `https://sor-attendance.web.app`.
   because they decide where check-ins go.
 - **Close check-in:** set *Self check-in enabled* to `FALSE` in Check-in Settings.
 - **New student:** add their row to the attendance tab as usual, then run
-  **Check-in → Add student names to Check-in Roster** and fill in their email.
+  `fillRosterNames` from the SOR Check-in editor (function dropdown → **Run**)
+  and fill in their email.
 - **New season tab:** change *Attendance tab* in Check-in Settings. The new tab
   needs the same column-A labels (`Date`, `Shift Number`, `Location`,
   `Start Time`, `End Time`, `Avg Attendees`).
@@ -187,8 +198,7 @@ It prints your site address, for example `https://sor-attendance.web.app`.
 
 | Message | Fix |
 |---|---|
-| *Server not configured: run Check-in > Set Firebase API key…* | Do Step 2.5. |
-| *Your sign-in expired* on every request | The key from Step 2.5 must be the same `apiKey` as in `config.js`. If you restricted that key in Google Cloud, do **not** use an "HTTP referrers" restriction, because the script calls it from Google's servers. |
+| *Your sign-in expired* on every request | `FIREBASE_API_KEY` in `Code.js` must be the same `apiKey` as in `config.js`. If you restricted that key in Google Cloud, do **not** use an "HTTP referrers" restriction, because the script calls it from Google's servers. |
 | *Server error* / *Failed to fetch* | Check `scriptUrl` ends in `/exec`, and that the deployment's access is **Anyone**. |
 | *… is not on the Check-in Roster* | Add the email in column B of Check-in Roster. It must be the Google account they signed in with. |
 | *… is not a row in the attendance tab* | The name on Check-in Roster must match column A of the attendance tab (case and extra spaces don't matter). |

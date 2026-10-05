@@ -82,7 +82,7 @@ class FakeSheet {
 const toSigned = (buf) => Array.from(buf).map((b) => (b > 127 ? b - 256 : b));
 
 // tokens: { idToken: { email, emailVerified, displayName } } accepted by the fake lookup API.
-function load({ now = new Date('2026-10-05T09:00:00Z'), tokens = {}, apiKey = 'test-key' } = {}) {
+function load({ now = new Date('2026-10-05T09:00:00Z'), tokens = {}, apiKey = 'test-key', keyInProps = true } = {}) {
   const sheets = {};
   const ss = {
     getSheetByName: (n) => sheets[n] || null,
@@ -90,8 +90,9 @@ function load({ now = new Date('2026-10-05T09:00:00Z'), tokens = {}, apiKey = 't
     getSpreadsheetTimeZone: () => 'Etc/UTC',
     toast() {}
   };
-  const props = apiKey ? { FIREBASE_API_KEY: apiKey } : {};
+  const props = apiKey && keyInProps ? { FIREBASE_API_KEY: apiKey } : {};
   const fetches = [];
+  const openedIds = [];
   const cache = {};
   const rule = () => {
     const b = { whenTextEqualTo: () => b, setBackground: () => b, setRanges: () => b, build: () => ({}) };
@@ -108,6 +109,7 @@ function load({ now = new Date('2026-10-05T09:00:00Z'), tokens = {}, apiKey = 't
     Date: FixedDate,
     SpreadsheetApp: {
       getActive: () => ss,
+      openById: (id) => { openedIds.push(id); return ss; },
       flush() {},
       getUi: () => ({ alert() {}, createMenu: () => ({ addItem() { return this; }, addSeparator() { return this; }, addToUi() {} }) }),
       newConditionalFormatRule: rule
@@ -125,6 +127,7 @@ function load({ now = new Date('2026-10-05T09:00:00Z'), tokens = {}, apiKey = 't
       base64EncodeWebSafe: (bytes) => Buffer.from(bytes.map((b) => b & 255)).toString('base64url'),
       getUuid: () => crypto.randomUUID()
     },
+    Logger: { log() {} },
     Session: { getEffectiveUser: () => ({ getEmail: () => 'owner@example.com' }) },
     UrlFetchApp: {
       fetch(url, opts) {
@@ -154,7 +157,7 @@ function load({ now = new Date('2026-10-05T09:00:00Z'), tokens = {}, apiKey = 't
     return JSON.parse(out.getContent());
   };
   return {
-    app: context, sheets, props, fetches, call,
+    app: context, sheets, props, fetches, openedIds, call,
     setTime: (iso) => { clock.now = new RealDate(iso).getTime(); }
   };
 }
